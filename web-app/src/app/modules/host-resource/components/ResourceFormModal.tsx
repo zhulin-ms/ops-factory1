@@ -433,6 +433,7 @@ export default function ResourceFormModal({
                 // Check duplicate business service name in related group hierarchy
                 const editingBsId = editingItem?.type === 'business-service' ? editingItem.data.id : null
                 const trimmedBsName = nameResult.sanitized
+                const trimmedBsCode = codeResult.sanitized
                 const relatedGroupIds = getRelatedGroupIds(bsGroupId)
                 const duplicateBs = businessServices.find(bs => {
                     if (!bs.groupId) return false
@@ -445,6 +446,20 @@ export default function ResourceFormModal({
                     setError(t('hostResource.duplicateBusinessServiceName', { name: trimmedBsName }))
                     setSaving(false)
                     return
+                }
+
+                // Check duplicate business service code globally (across all groups)
+                if (trimmedBsCode) {
+                    const duplicateBsCode = businessServices.find(bs => {
+                        if (bs.id === editingBsId) return false
+                        if (!bs.code || bs.code?.toLowerCase() !== trimmedBsCode.toLowerCase()) return false
+                        return true
+                    })
+                    if (duplicateBsCode) {
+                        setError(t('hostResource.duplicateBusinessServiceCode', { code: trimmedBsCode }))
+                        setSaving(false)
+                        return
+                    }
                 }
 
                 await onSaveBusinessService({
@@ -877,7 +892,15 @@ export default function ResourceFormModal({
                                     </div>
                                     <div className="form-group">
                                         <label className="form-label">{t('hostResource.bsCode')}{requiredStar}</label>
-                                        <input className="form-input" value={bsCode} onChange={e => setBsCode(e.target.value)} placeholder={t('hostResource.bsCodePlaceholder', { defaultValue: '' })} maxLength={50} />
+                                        <input
+                                            className="form-input"
+                                            value={bsCode}
+                                            onChange={e => setBsCode(e.target.value)}
+                                            placeholder={t('hostResource.bsCodePlaceholder', { defaultValue: '' })}
+                                            maxLength={50}
+                                            readOnly={editingItem?.type === 'business-service'}
+                                            disabled={editingItem?.type === 'business-service'}
+                                        />
                                     </div>
                                     <div className="form-group">
                                         <label className="form-label">{t('hostResource.bsPriority')}</label>

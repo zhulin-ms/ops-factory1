@@ -50,6 +50,8 @@ public class BusinessServiceService extends JsonFileEntityStore {
 
     private BusinessTypeService businessTypeService;
 
+    private HostGroupService hostGroupService;
+
     /**
      * Creates the business service service instance.
      */
@@ -111,6 +113,17 @@ public class BusinessServiceService extends JsonFileEntityStore {
     @Autowired
     public void setBusinessTypeService(BusinessTypeService businessTypeService) {
         this.businessTypeService = businessTypeService;
+    }
+
+    /**
+     * Sets the host group service via lazy injection.
+     *
+     * @param hostGroupService the host group service via lazy injection
+     */
+    @Lazy
+    @Autowired
+    public void setHostGroupService(HostGroupService hostGroupService) {
+        this.hostGroupService = hostGroupService;
     }
 
     /**
@@ -205,14 +218,31 @@ public class BusinessServiceService extends JsonFileEntityStore {
             }
         }
 
-        List<Map<String, Object>> servicesInGroup = listBusinessServices(groupId, null);
-        boolean nameDuplicate = servicesInGroup.stream()
-            .anyMatch(s -> name.equalsIgnoreCase(String.valueOf(s.get("name"))));
+        // Check for duplicate business service name in related group hierarchy
+        List<Map<String, Object>> allBusinessServices = listBusinessServices(null, null);
+        boolean nameDuplicate = allBusinessServices.stream()
+            .anyMatch(s -> {
+                String bsGroupId = s.get("groupId") != null ? s.get("groupId").toString() : null;
+                return name.equalsIgnoreCase(String.valueOf(s.get("name")))
+                    && doGroupHierarchiesOverlap(groupId, bsGroupId);
+            });
         if (nameDuplicate) {
-            throw new ConflictException("Business service name already exists in this group");
+            throw new ConflictException("Business service name already exists in this group hierarchy");
         }
 
-        ValidationUtils.validateStringField(body, "code", "Business service code", 50, false);
+        // Validate and check for duplicate business service code globally
+        String code = ValidationUtils.validateStringField(body, "code", "Business service code", 50, false);
+        if (code != null && !code.isEmpty()) {
+            boolean codeDuplicate = allBusinessServices.stream()
+                .anyMatch(s -> {
+                    String bsCode = s.get("code") != null ? s.get("code").toString() : "";
+                    return code.equalsIgnoreCase(bsCode);
+                });
+            if (codeDuplicate) {
+                throw new ConflictException("Business service code already exists");
+            }
+        }
+
         ValidationUtils.validateStringField(body, "description", "Description", 500, false);
 
         String id = UUID.randomUUID().toString();
@@ -221,7 +251,7 @@ public class BusinessServiceService extends JsonFileEntityStore {
         Map<String, Object> bs = new LinkedHashMap<>();
         bs.put("id", id);
         bs.put("name", name);
-        bs.put("code", body.getOrDefault("code", ""));
+        bs.put("code", code != null ? code : "");
         bs.put("groupId", groupId);
         bs.put("description", body.getOrDefault("description", ""));
         bs.put("hostIds", body.getOrDefault("hostIds", new ArrayList<String>()));
@@ -260,17 +290,35 @@ public class BusinessServiceService extends JsonFileEntityStore {
 
             Object groupIdObj = body.containsKey("groupId") ? body.get("groupId") : bs.get("groupId");
             String groupId = groupIdObj != null ? groupIdObj.toString() : "";
-            List<Map<String, Object>> servicesInGroup = listBusinessServices(groupId, null);
-            boolean nameDuplicate = servicesInGroup.stream()
+            // Check for duplicate business service name in related group hierarchy
+            List<Map<String, Object>> allBusinessServices = listBusinessServices(null, null);
+            boolean nameDuplicate = allBusinessServices.stream()
                 .filter(s -> !id.equals(s.get("id")))
-                .anyMatch(s -> newName.equalsIgnoreCase(String.valueOf(s.get("name"))));
+                .anyMatch(s -> {
+                    String bsGroupId = s.get("groupId") != null ? s.get("groupId").toString() : null;
+                    return newName.equalsIgnoreCase(String.valueOf(s.get("name")))
+                        && doGroupHierarchiesOverlap(groupId, bsGroupId);
+                });
             if (nameDuplicate) {
-                throw new ConflictException("Business service name already exists in this group");
+                throw new ConflictException("Business service name already exists in this group hierarchy");
             }
             bs.put("name", newName);
         }
         if (body.containsKey("code")) {
             String code = ValidationUtils.validateStringField(body, "code", "Business service code", 50, false);
+            if (code != null && !code.isEmpty()) {
+                // Check for duplicate business service code globally
+                List<Map<String, Object>> allBusinessServices = listBusinessServices(null, null);
+                boolean codeDuplicate = allBusinessServices.stream()
+                    .filter(s -> !id.equals(s.get("id")))
+                    .anyMatch(s -> {
+                        String bsCode = s.get("code") != null ? s.get("code").toString() : "";
+                        return code.equalsIgnoreCase(bsCode);
+                    });
+                if (codeDuplicate) {
+                    throw new ConflictException("Business service code already exists");
+                }
+            }
             bs.put("code", code);
         }
         if (body.containsKey("groupId")) {
@@ -799,6 +847,108 @@ public class BusinessServiceService extends JsonFileEntityStore {
         node.put("groupId", cluster != null ? cluster.get("groupId") : null);
         node.put("tags", h.get("tags"));
         return node;
+    }
+
+    // ── Group Hierarchy Helpers ──────────────────────────────────────────
+
+    /**
+     * Gets the ancestor IDs of a group (including itself) by traversing up the parentId chain.
+     *
+     * @param groupId the group ID to start from
+     * @return set of ancestor group IDs (including the input group)
+     */
+    private LinkedHashSet<String> getAncestorGroupIds(String groupId) {
+        LinkedHashSet<String> ancestorIds = new LinkedHashSet<>();
+        if (hostGroupService == null) {
+            ancestorIds.add(groupId);
+            return ancestorIds;
+        }
+
+        String currentId = groupId;
+        while (currentId != null && !currentId.isBlank()) {
+            ancestorIds.add(currentId);
+            try {
+                Map<String, Object> group = hostGroupService.getGroup(currentId);
+                Object parentId = group.get("parentId");
+                currentId = (parentId != null && !parentId.toString().isBlank()) ? parentId.toString() : null;
+            } catch (NotFoundException e) {
+                break;
+            }
+        }
+        return ancestorIds;
+    }
+
+    /**
+     * Gets the descendant IDs of a group (including itself) by finding all children recursively.
+     *
+     * @param groupId the group ID to start from
+     * @return set of descendant group IDs (including the input group)
+     */
+    private LinkedHashSet<String> getDescendantGroupIds(String groupId) {
+        LinkedHashSet<String> descendantIds = new LinkedHashSet<>();
+        if (hostGroupService == null) {
+            descendantIds.add(groupId);
+            return descendantIds;
+        }
+
+        descendantIds.add(groupId);
+        List<Map<String, Object>> allGroups = hostGroupService.listGroups();
+
+        // Find all direct children of groupId
+        List<Map<String, Object>> children = allGroups.stream()
+            .filter(g -> {
+                Object parentId = g.get("parentId");
+                return groupId.equals(parentId != null ? parentId.toString() : null);
+            })
+            .toList();
+
+        // Recursively get descendants of each child
+        for (Map<String, Object> child : children) {
+            String childId = child.get("id") != null ? child.get("id").toString() : "";
+            if (!childId.isBlank()) {
+                descendantIds.addAll(getDescendantGroupIds(childId));
+            }
+        }
+
+        return descendantIds;
+    }
+
+    /**
+     * Gets all related group IDs (ancestors + descendants) for a given group.
+     * This represents the entire group hierarchy tree that the group belongs to.
+     *
+     * @param groupId the group ID
+     * @return set of all related group IDs in the hierarchy
+     */
+    private LinkedHashSet<String> getRelatedGroupIds(String groupId) {
+        LinkedHashSet<String> ancestorIds = getAncestorGroupIds(groupId);
+        LinkedHashSet<String> allRelatedIds = new LinkedHashSet<>(ancestorIds);
+
+        // Add all descendants of each ancestor
+        for (String ancestorId : ancestorIds) {
+            allRelatedIds.addAll(getDescendantGroupIds(ancestorId));
+        }
+
+        return allRelatedIds;
+    }
+
+    /**
+     * Checks if two group hierarchies overlap by comparing their related group IDs.
+     *
+     * @param groupId1 first group ID
+     * @param groupId2 second group ID
+     * @return true if the group hierarchies overlap
+     */
+    private boolean doGroupHierarchiesOverlap(String groupId1, String groupId2) {
+        if (groupId1 == null || groupId2 == null) {
+            return false;
+        }
+
+        LinkedHashSet<String> relatedIds1 = getRelatedGroupIds(groupId1);
+        LinkedHashSet<String> relatedIds2 = getRelatedGroupIds(groupId2);
+
+        // Check if any ID exists in both sets
+        return relatedIds1.stream().anyMatch(relatedIds2::contains);
     }
 
 }
