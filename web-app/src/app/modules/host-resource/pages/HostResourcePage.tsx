@@ -941,6 +941,7 @@ export default function HostResourcePage() {
             {activeTab === 'business-types' && (
                 <BusinessTypeTab
                     businessTypes={businessTypesHook.businessTypes}
+                    businessServices={businessServices}
                     loading={businessTypesHook.loading}
                     onCreate={businessTypesHook.createBusinessType}
                     onUpdate={async (id, body) => {

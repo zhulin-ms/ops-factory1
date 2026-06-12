@@ -5,6 +5,7 @@
 package com.huawei.opsfactory.gateway.controller.base;
 
 import com.huawei.opsfactory.gateway.exception.BadRequestException;
+import com.huawei.opsfactory.gateway.exception.ConflictException;
 import com.huawei.opsfactory.gateway.exception.NotFoundException;
 import com.huawei.opsfactory.gateway.service.ClusterTypeService;
 
@@ -113,11 +114,11 @@ public abstract class BaseClusterTypeController {
      *
      * @param id cluster type identifier
      * @param request current HTTP request
-     * @return ResponseEntity with success status or 404
+     * @return ResponseEntity with success status or 404/409
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<Map<String, Object>> deleteClusterType(@PathVariable("id") String id,
-        HttpServletRequest request) {
+        HttpServletRequest request) throws ConflictException, NotFoundException {
         boolean deleted = clusterTypeService.deleteClusterType(id);
         if (!deleted) {
             Map<String, Object> body = new LinkedHashMap<>();

@@ -6,11 +6,12 @@ import ListSearchInput from '../../../platform/ui/list/ListSearchInput'
 import ListResultsMeta from '../../../platform/ui/list/ListResultsMeta'
 import { useToast } from '../../../platform/providers/ToastContext'
 import { useConfirmDialog } from '../../../platform/providers/ConfirmDialogContext'
-import type { BusinessType } from '../../../../types/host'
+import type { BusinessType, BusinessService } from '../../../../types/host'
 import { useFormValidation } from '../../../../utils/useFormValidation'
 
 type Props = {
     businessTypes: BusinessType[]
+    businessServices: BusinessService[]
     loading: boolean
     onCreate: (body: Partial<BusinessType>) => Promise<BusinessType>
     onUpdate: (id: string, body: Partial<BusinessType>) => Promise<BusinessType>
@@ -27,7 +28,7 @@ type FormData = {
 
 const emptyForm: FormData = { name: '', code: '', description: '', color: '#6366f1', knowledge: '' }
 
-export default function BusinessTypeTab({ businessTypes, loading, onCreate, onUpdate, onDelete }: Props) {
+export default function BusinessTypeTab({ businessTypes, businessServices, loading, onCreate, onUpdate, onDelete }: Props) {
     const { t } = useTranslation()
     const { showToast } = useToast()
     const { requestConfirm } = useConfirmDialog()
@@ -115,6 +116,13 @@ export default function BusinessTypeTab({ businessTypes, loading, onCreate, onUp
     }, [editing, form, businessTypes, onCreate, onUpdate, showToast, t, validateFormData])
 
     const handleDelete = useCallback(async (item: BusinessType) => {
+        // Check if the business type is being used by any business service
+        const inUse = businessServices.filter(bs => bs.businessTypeId === item.id)
+        if (inUse.length > 0) {
+            const serviceNames = inUse.map(bs => bs.name).join(', ')
+            showToast('warning', t('hostResource.businessTypeInUse', { name: item.name, services: serviceNames }))
+            return
+        }
         const confirmed = await requestConfirm({
             title: t('common.confirmTitle'),
             message: t('hostResource.confirmDeleteBusinessType'),
@@ -128,7 +136,7 @@ export default function BusinessTypeTab({ businessTypes, loading, onCreate, onUp
                 showToast('error', err instanceof Error ? err.message : 'Failed')
             }
         }
-    }, [onDelete, t, requestConfirm, showToast])
+    }, [businessServices, onDelete, t, requestConfirm, showToast])
 
     return (
         <div className="hr-type-tab-content">

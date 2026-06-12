@@ -6,10 +6,13 @@ package com.huawei.opsfactory.gateway.service;
 
 import com.huawei.opsfactory.gateway.common.util.ValidationUtils;
 import com.huawei.opsfactory.gateway.config.GatewayProperties;
+import com.huawei.opsfactory.gateway.exception.ConflictException;
 import com.huawei.opsfactory.gateway.exception.NotFoundException;
 
 import jakarta.annotation.PostConstruct;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -28,6 +31,8 @@ import java.util.UUID;
 public class BusinessTypeService extends JsonFileEntityStore {
     private final GatewayProperties properties;
 
+    private BusinessServiceService businessServiceService;
+
     /**
      * Creates the business type service instance.
      *
@@ -36,6 +41,17 @@ public class BusinessTypeService extends JsonFileEntityStore {
     public BusinessTypeService(GatewayProperties properties) {
         super("business-type");
         this.properties = properties;
+    }
+
+    /**
+     * Sets the business service service via lazy injection.
+     *
+     * @param businessServiceService the business service service
+     */
+    @Lazy
+    @Autowired
+    public void setBusinessServiceService(BusinessServiceService businessServiceService) {
+        this.businessServiceService = businessServiceService;
     }
 
     /**
@@ -160,8 +176,20 @@ public class BusinessTypeService extends JsonFileEntityStore {
      *
      * @param id entity identifier
      * @return true if deleted, false if not found
+     * @throws ConflictException if the business type is in use
      */
-    public boolean deleteBusinessType(String id) {
+    public boolean deleteBusinessType(String id) throws ConflictException {
+        // Check if the business type is being used by any business service
+        if (businessServiceService != null) {
+            List<Map<String, Object>> businessServices = businessServiceService.listBusinessServices(null, null);
+            for (Map<String, Object> bs : businessServices) {
+                String bsBusinessTypeId = bs.get("businessTypeId") != null ? bs.get("businessTypeId").toString() : null;
+                if (id.equals(bsBusinessTypeId)) {
+                    String bsName = bs.get("name") != null ? bs.get("name").toString() : "";
+                    throw new ConflictException("Cannot delete business type: it is being used by business service '" + bsName + "'");
+                }
+            }
+        }
         return deleteEntityFile(id);
     }
 

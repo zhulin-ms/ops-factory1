@@ -4,6 +4,7 @@
 
 package com.huawei.opsfactory.gateway.controller;
 
+import com.huawei.opsfactory.gateway.exception.ConflictException;
 import com.huawei.opsfactory.gateway.exception.NotFoundException;
 import com.huawei.opsfactory.gateway.service.BusinessTypeService;
 
@@ -117,11 +118,11 @@ public class BusinessTypeController {
      *
      * @param id business type identifier
      * @param request current HTTP request
-     * @return ResponseEntity with success status or 404
+     * @return ResponseEntity with success status or 404/409
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<Map<String, Object>> deleteBusinessType(@PathVariable("id") String id,
-        HttpServletRequest request) {
+        HttpServletRequest request) throws ConflictException {
         boolean deleted = businessTypeService.deleteBusinessType(id);
         if (!deleted) {
             Map<String, Object> body = new LinkedHashMap<>();

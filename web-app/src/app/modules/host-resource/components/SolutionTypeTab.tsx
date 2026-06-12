@@ -139,26 +139,31 @@ export default function SolutionTypeTab({ solutionTypes, loading, onCreate, onUp
                         const typeName = match[1]
                         const usageInfo = match[2]
                         const parts: string[] = []
+
                         // Split by ", " followed by digits and "Cluster Type(s)" to separate sections
                         // Input: "2 SOP(s) - Log Cleanup, Service Restart, 1 Cluster Type(s) - test11, test22"
                         // Result: ["2 SOP(s) - Log Cleanup, Service Restart", "1 Cluster Type(s) - test11, test22"]
                         const clusterTypeSplit = usageInfo.split(/, (?=\d+ Cluster Type\(s\))/)
-                        // Process first token (SOP section)
-                        const sopMatch = clusterTypeSplit[0].match(/(\d+) SOP\(s\) - (.+)/)
-                        if (sopMatch) {
-                            const count = parseInt(sopMatch[1], 10)
-                            const names = sopMatch[2].trim()
-                            parts.push(t('hostResource.solutionTypeUsedBySops', { count, names }))
-                        }
-                        // Process second token (Cluster Type section) if exists
-                        if (clusterTypeSplit.length > 1) {
-                            const clusterMatch = clusterTypeSplit[1].match(/(\d+) Cluster Type\(s\) - (.+)/)
+
+                        // Process all tokens - could be SOP(s), Cluster Type(s), or both
+                        for (const token of clusterTypeSplit) {
+                            // Try SOP format first
+                            const sopMatch = token.match(/(\d+) SOP\(s\) - (.+)/)
+                            if (sopMatch) {
+                                const count = parseInt(sopMatch[1], 10)
+                                const names = sopMatch[2].trim()
+                                parts.push(t('hostResource.solutionTypeUsedBySops', { count, names }))
+                                continue
+                            }
+                            // Try Cluster Type format
+                            const clusterMatch = token.match(/(\d+) Cluster Type\(s\) - (.+)/)
                             if (clusterMatch) {
                                 const count = parseInt(clusterMatch[1], 10)
                                 const names = clusterMatch[2].trim()
                                 parts.push(t('hostResource.solutionTypeUsedByClusterTypes', { count, names }))
                             }
                         }
+
                         if (parts.length > 0) {
                             errorMessage = t('hostResource.solutionTypeInUseDetailed', { name: typeName, details: parts.join('；') })
                         }

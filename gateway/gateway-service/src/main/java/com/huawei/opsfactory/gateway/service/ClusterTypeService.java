@@ -7,10 +7,13 @@ package com.huawei.opsfactory.gateway.service;
 import com.huawei.opsfactory.gateway.common.util.ValidationUtils;
 import com.huawei.opsfactory.gateway.config.GatewayProperties;
 import com.huawei.opsfactory.gateway.exception.BadRequestException;
+import com.huawei.opsfactory.gateway.exception.ConflictException;
 import com.huawei.opsfactory.gateway.exception.NotFoundException;
 
 import jakarta.annotation.PostConstruct;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -34,6 +37,8 @@ public class ClusterTypeService extends JsonFileEntityStore {
 
     private final SolutionTypeService solutionTypeService;
 
+    private ClusterService clusterService;
+
     /**
      * Creates the cluster type service instance.
      *
@@ -44,6 +49,17 @@ public class ClusterTypeService extends JsonFileEntityStore {
         super("cluster-type");
         this.properties = properties;
         this.solutionTypeService = solutionTypeService;
+    }
+
+    /**
+     * Sets the cluster service via lazy injection.
+     *
+     * @param clusterService the cluster service
+     */
+    @Lazy
+    @Autowired
+    public void setClusterService(ClusterService clusterService) {
+        this.clusterService = clusterService;
     }
 
     /**
@@ -211,8 +227,27 @@ public class ClusterTypeService extends JsonFileEntityStore {
      *
      * @param id entity identifier
      * @return true if the cluster type was deleted, false if it was not found
+     * @throws ConflictException if the cluster type is in use
      */
-    public boolean deleteClusterType(String id) {
+    public boolean deleteClusterType(String id) throws ConflictException, NotFoundException {
+        // Get the cluster type to check its name and code
+        Map<String, Object> ct = getClusterType(id);
+
+        String name = ct.get("name") != null ? ct.get("name").toString() : "";
+        String code = ct.get("code") != null ? ct.get("code").toString() : "";
+
+        // Check if any cluster is using this cluster type by name or code
+        if (clusterService != null) {
+            List<Map<String, Object>> clusters = clusterService.listClusters(null, null);
+            for (Map<String, Object> cluster : clusters) {
+                String clusterType = cluster.get("type") != null ? cluster.get("type").toString() : "";
+                String clusterName = cluster.get("name") != null ? cluster.get("name").toString() : "";
+
+                if (name.equals(clusterType) || code.equals(clusterType)) {
+                    throw new ConflictException("Cannot delete cluster type: it is being used by cluster '" + clusterName + "'");
+                }
+            }
+        }
         return deleteEntityFile(id);
     }
 

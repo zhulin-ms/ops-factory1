@@ -8,8 +8,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import com.huawei.opsfactory.gateway.config.GatewayProperties;
+import com.huawei.opsfactory.gateway.exception.ConflictException;
 import com.huawei.opsfactory.gateway.exception.NotFoundException;
 
 import org.junit.Before;
@@ -964,7 +966,11 @@ public class ClusterTypeServiceTest {
         createClusterType("ct-del", "ToDelete", "DEL");
         assertTrue(Files.exists(clusterTypesDir.resolve("ct-del.json")));
 
-        clusterTypeService.deleteClusterType("ct-del");
+        try {
+            clusterTypeService.deleteClusterType("ct-del");
+        } catch (ConflictException | NotFoundException e) {
+            fail("Deletion should succeed when cluster type is not in use: " + e.getMessage());
+        }
         assertFalse(Files.exists(clusterTypesDir.resolve("ct-del.json")));
     }
 

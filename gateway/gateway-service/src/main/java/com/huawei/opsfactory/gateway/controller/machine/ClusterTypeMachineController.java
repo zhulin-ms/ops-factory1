@@ -7,6 +7,7 @@ package com.huawei.opsfactory.gateway.controller.machine;
 import com.huawei.opsfactory.common.aop.BasicAuth;
 import com.huawei.opsfactory.gateway.controller.base.BaseClusterTypeController;
 import com.huawei.opsfactory.gateway.exception.BadRequestException;
+import com.huawei.opsfactory.gateway.exception.ConflictException;
 import com.huawei.opsfactory.gateway.exception.NotFoundException;
 import com.huawei.opsfactory.gateway.service.ClusterTypeService;
 
@@ -116,12 +117,14 @@ public class ClusterTypeMachineController extends BaseClusterTypeController {
      * @param id cluster type identifier
      * @param request current HTTP request
      * @return response entity with success status or 404 if not found
+     * @throws ConflictException if the cluster type is in use
+     * @throws NotFoundException if the cluster type is not found
      */
     @Override
     @DeleteMapping("/{id}")
     @BasicAuth
     public ResponseEntity<Map<String, Object>> deleteClusterType(@PathVariable("id") String id,
-        HttpServletRequest request) {
+        HttpServletRequest request) throws ConflictException, NotFoundException {
         return super.deleteClusterType(id, request);
     }
 }
