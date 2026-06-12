@@ -40,6 +40,7 @@ public class ClusterTypeServiceTest {
 
     private ClusterTypeService clusterTypeService;
     private SolutionTypeService solutionTypeService;
+    private ClusterService clusterService;
     private GatewayProperties properties;
 
     private Path clusterTypesDir;
@@ -61,6 +62,11 @@ public class ClusterTypeServiceTest {
 
         clusterTypeService = new ClusterTypeService(properties, solutionTypeService);
         clusterTypeService.init();
+
+        // Create and inject ClusterService for deletion tests
+        clusterService = new ClusterService(properties);
+        clusterService.init();
+        clusterTypeService.setClusterService(clusterService);
 
         clusterTypesDir = Path.of(tempFolder.getRoot().getAbsolutePath())
             .toAbsolutePath()
@@ -950,10 +956,9 @@ public class ClusterTypeServiceTest {
     /**
      * Tests delete cluster type not found.
      */
-    @Test
+    @Test(expected = NotFoundException.class)
     public void testDeleteClusterType_notFound() throws Exception {
-        boolean deleted = clusterTypeService.deleteClusterType("nonexistent");
-        assertFalse(deleted);
+        clusterTypeService.deleteClusterType("nonexistent");
     }
 
     /**
@@ -972,6 +977,72 @@ public class ClusterTypeServiceTest {
             fail("Deletion should succeed when cluster type is not in use: " + e.getMessage());
         }
         assertFalse(Files.exists(clusterTypesDir.resolve("ct-del.json")));
+    }
+
+    /**
+     * Tests delete cluster type when in use by cluster name throws exception.
+     *
+     * @throws IOException if the operation fails
+     */
+    @Test
+    public void testDeleteClusterType_inUseByName_throwsException() throws IOException {
+        createClusterType("ct-web", "Web Cluster", "WEB");
+
+        // Create a cluster that uses this cluster type by name
+        createCluster("cluster-1", "prod-web-1", "Web Cluster", "group-1");
+
+        try {
+            clusterTypeService.deleteClusterType("ct-web");
+            fail("Expected ConflictException when cluster type is in use by cluster");
+        } catch (ConflictException e) {
+            assertTrue(e.getMessage().contains("it is being used by cluster"));
+            assertTrue(e.getMessage().contains("prod-web-1"));
+        } catch (NotFoundException e) {
+            fail("Should not throw NotFoundException for existing cluster type: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Tests delete cluster type when in use by cluster code throws exception.
+     *
+     * @throws IOException if the operation fails
+     */
+    @Test
+    public void testDeleteClusterType_inUseByCode_throwsException() throws IOException {
+        createClusterType("ct-db", "Database Cluster", "DB");
+
+        // Create a cluster that uses this cluster type by code
+        createCluster("cluster-2", "prod-db-1", "DB", "group-1");
+
+        try {
+            clusterTypeService.deleteClusterType("ct-db");
+            fail("Expected ConflictException when cluster type is in use by cluster");
+        } catch (ConflictException e) {
+            assertTrue(e.getMessage().contains("it is being used by cluster"));
+            assertTrue(e.getMessage().contains("prod-db-1"));
+        } catch (NotFoundException e) {
+            fail("Should not throw NotFoundException for existing cluster type: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Tests delete cluster type when not in use succeeds even with clusters present.
+     *
+     * @throws IOException if the operation fails
+     */
+    @Test
+    public void testDeleteClusterType_notInUse_succeeds() throws IOException {
+        createClusterType("ct-app", "App Cluster", "APP");
+
+        // Create a cluster that uses a different cluster type
+        createCluster("cluster-3", "prod-app-1", "Web Cluster", "group-1");
+
+        try {
+            boolean deleted = clusterTypeService.deleteClusterType("ct-app");
+            assertTrue(deleted);
+        } catch (ConflictException | NotFoundException e) {
+            fail("Deletion should succeed when cluster type is not in use: " + e.getMessage());
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────
@@ -1003,6 +1074,52 @@ public class ClusterTypeServiceTest {
             Path file = clusterTypesDir.resolve(id + ".json");
             String json = new com.fasterxml.jackson.databind.ObjectMapper().writerWithDefaultPrettyPrinter()
                 .writeValueAsString(ct);
+            Files.writeString(file, json, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * Creates a cluster directly in the data directory (bypassing the service).
+     * Used to set up pre-existing data for deletion tests.
+     *
+     * @param id the cluster identifier
+     * @param name the cluster name
+     * @param type the cluster type (can be name or code)
+     * @param groupId the environment group ID
+     */
+    private void createCluster(String id, String name, String type, String groupId) {
+        Path clustersDir = Path.of(tempFolder.getRoot().getAbsolutePath())
+            .toAbsolutePath()
+            .normalize()
+            .resolve("gateway")
+            .resolve("data")
+            .resolve("clusters");
+
+        try {
+            Files.createDirectories(clustersDir);
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+
+        Map<String, Object> cluster = new LinkedHashMap<>();
+        cluster.put("id", id);
+        cluster.put("name", name);
+        cluster.put("type", type);
+        cluster.put("groupId", groupId);
+        cluster.put("description", "");
+        cluster.put("knowledge", "");
+        cluster.put("port", 8080);
+        cluster.put("username", "");
+        cluster.put("password", "");
+        cluster.put("createdAt", "2026-06-12T00:00:00Z");
+        cluster.put("updatedAt", "2026-06-12T00:00:00Z");
+
+        try {
+            Path file = clustersDir.resolve(id + ".json");
+            String json = new com.fasterxml.jackson.databind.ObjectMapper().writerWithDefaultPrettyPrinter()
+                .writeValueAsString(cluster);
             Files.writeString(file, json, StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException(e);

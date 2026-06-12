@@ -8,8 +8,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.junit.Assert.assertFalse;
 
 import com.huawei.opsfactory.gateway.config.GatewayProperties;
+import com.huawei.opsfactory.gateway.exception.ConflictException;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -17,7 +19,12 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -34,6 +41,10 @@ public class BusinessTypeServiceTest {
 
     private GatewayProperties properties;
 
+    private Path businessTypesDir;
+
+    private BusinessServiceService businessServiceService;
+
     /**
      * Sets the up.
      *
@@ -48,6 +59,18 @@ public class BusinessTypeServiceTest {
 
         businessTypeService = new BusinessTypeService(properties);
         businessTypeService.init();
+
+        // Create and inject BusinessServiceService for deletion tests
+        businessServiceService = new BusinessServiceService(properties);
+        businessServiceService.init();
+        businessTypeService.setBusinessServiceService(businessServiceService);
+
+        businessTypesDir = Path.of(tempFolder.getRoot().getAbsolutePath())
+            .toAbsolutePath()
+            .normalize()
+            .resolve("gateway")
+            .resolve("data")
+            .resolve("business-types");
     }
 
     // ── createBusinessType ───────────────────────────────────────────
@@ -222,5 +245,84 @@ public class BusinessTypeServiceTest {
 
         Map<String, Object> result = businessTypeService.updateBusinessType(id, updates);
         assertEquals("<img src=x onerror=alert(1)>", result.get("description"));
+    }
+
+    // ── deleteBusinessType ───────────────────────────────────────────────
+
+    /**
+     * Tests delete business type when not in use succeeds.
+     */
+    @Test
+    public void testDeleteBusinessType_notInUse_succeeds() throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("name", "ToDelete");
+        body.put("code", "DEL");
+        Map<String, Object> created = businessTypeService.createBusinessType(body);
+        String id = (String) created.get("id");
+
+        boolean deleted = businessTypeService.deleteBusinessType(id);
+        assertTrue(deleted);
+    }
+
+    /**
+     * Tests delete business type when in use throws exception.
+     */
+    @Test
+    public void testDeleteBusinessType_inUse_throwsException() throws Exception {
+        // Create a business type
+        Map<String, Object> btBody = new LinkedHashMap<>();
+        btBody.put("name", "WebApp");
+        btBody.put("code", "WEB");
+        Map<String, Object> businessType = businessTypeService.createBusinessType(btBody);
+        String btId = (String) businessType.get("id");
+
+        // Create a business service that uses this business type
+        Map<String, Object> bsBody = new LinkedHashMap<>();
+        bsBody.put("name", "OrderService");
+        bsBody.put("code", "ORDER");
+        bsBody.put("groupId", "group-1");
+        bsBody.put("businessTypeId", btId);
+        businessServiceService.createBusinessService(bsBody);
+
+        // Try to delete the business type, should fail
+        try {
+            businessTypeService.deleteBusinessType(btId);
+            fail("Expected ConflictException when business type is in use");
+        } catch (ConflictException e) {
+            assertTrue(e.getMessage().contains("it is being used by business service"));
+            assertTrue(e.getMessage().contains("OrderService"));
+        }
+    }
+
+    /**
+     * Tests delete business type when not in use succeeds even with business services present.
+     */
+    @Test
+    public void testDeleteBusinessType_notInUseWithOtherServices_succeeds() throws Exception {
+        // Create a business type
+        Map<String, Object> btBody1 = new LinkedHashMap<>();
+        btBody1.put("name", "WebApp");
+        btBody1.put("code", "WEB");
+        Map<String, Object> businessType1 = businessTypeService.createBusinessType(btBody1);
+        String btId1 = (String) businessType1.get("id");
+
+        // Create another business type
+        Map<String, Object> btBody2 = new LinkedHashMap<>();
+        btBody2.put("name", "DbApp");
+        btBody2.put("code", "DB");
+        Map<String, Object> businessType2 = businessTypeService.createBusinessType(btBody2);
+        String btId2 = (String) businessType2.get("id");
+
+        // Create a business service that uses the first business type
+        Map<String, Object> bsBody = new LinkedHashMap<>();
+        bsBody.put("name", "OrderService");
+        bsBody.put("code", "ORDER");
+        bsBody.put("groupId", "group-1");
+        bsBody.put("businessTypeId", btId1);
+        businessServiceService.createBusinessService(bsBody);
+
+        // Try to delete the second business type (not in use), should succeed
+        boolean deleted = businessTypeService.deleteBusinessType(btId2);
+        assertTrue(deleted);
     }
 }

@@ -8,8 +8,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import com.huawei.opsfactory.gateway.config.GatewayProperties;
+import com.huawei.opsfactory.gateway.exception.ConflictException;
 import com.huawei.opsfactory.gateway.exception.NotFoundException;
 
 import org.junit.Before;
@@ -353,6 +355,167 @@ public class BusinessServiceServiceTest {
 
         List<Map<String, Object>> nullKw = businessServiceService.searchByKeyword(null);
         assertEquals(1, nullKw.size());
+    }
+
+    // ── Code Uniqueness (create) ───────────────────────────────────────
+
+    /**
+     * Tests create business service with duplicate code throws exception.
+     */
+    @Test
+    public void testCreateBusinessService_duplicateCode_throwsException() throws Exception {
+        Map<String, Object> body1 = new LinkedHashMap<>();
+        body1.put("name", "Service1");
+        body1.put("code", "ORDER");
+        body1.put("groupId", "group-1");
+        body1.put("businessTypeId", "bt-1");
+
+        businessServiceService.createBusinessService(body1);
+
+        Map<String, Object> body2 = new LinkedHashMap<>();
+        body2.put("name", "Service2");
+        body2.put("code", "ORDER");
+        body2.put("groupId", "group-2");
+        body2.put("businessTypeId", "bt-1");
+
+        try {
+            businessServiceService.createBusinessService(body2);
+            fail("Expected ConflictException for duplicate business service code");
+        } catch (ConflictException e) {
+            assertTrue(e.getMessage().contains("Business service code already exists"));
+        }
+    }
+
+    /**
+     * Tests create business service with case-insensitive duplicate code throws exception.
+     */
+    @Test
+    public void testCreateBusinessService_caseInsensitiveDuplicateCode_throwsException() throws Exception {
+        Map<String, Object> body1 = new LinkedHashMap<>();
+        body1.put("name", "Service1");
+        body1.put("code", "ORDER");
+        body1.put("groupId", "group-1");
+        body1.put("businessTypeId", "bt-1");
+
+        businessServiceService.createBusinessService(body1);
+
+        Map<String, Object> body2 = new LinkedHashMap<>();
+        body2.put("name", "Service2");
+        body2.put("code", "order");
+        body2.put("groupId", "group-2");
+        body2.put("businessTypeId", "bt-1");
+
+        try {
+            businessServiceService.createBusinessService(body2);
+            fail("Expected ConflictException for case-insensitive duplicate code");
+        } catch (ConflictException e) {
+            assertTrue(e.getMessage().contains("Business service code already exists"));
+        }
+    }
+
+    /**
+     * Tests create business service with empty code succeeds.
+     */
+    @Test
+    public void testCreateBusinessService_emptyCode_succeeds() throws Exception {
+        Map<String, Object> body1 = new LinkedHashMap<>();
+        body1.put("name", "Service1");
+        body1.put("code", "");
+        body1.put("groupId", "group-1");
+        body1.put("businessTypeId", "bt-1");
+
+        businessServiceService.createBusinessService(body1);
+
+        Map<String, Object> body2 = new LinkedHashMap<>();
+        body2.put("name", "Service2");
+        body2.put("code", "");
+        body2.put("groupId", "group-2");
+        body2.put("businessTypeId", "bt-1");
+
+        // Both empty codes should be allowed
+        Map<String, Object> result = businessServiceService.createBusinessService(body2);
+        assertEquals("Service2", result.get("name"));
+        assertEquals("", result.get("code"));
+    }
+
+    // ── Code Uniqueness (update) ───────────────────────────────────────
+
+    /**
+     * Tests update business service with duplicate code throws exception.
+     */
+    @Test
+    public void testUpdateBusinessService_duplicateCode_throwsException() throws Exception {
+        Map<String, Object> body1 = new LinkedHashMap<>();
+        body1.put("name", "Service1");
+        body1.put("code", "ORDER");
+        body1.put("groupId", "group-1");
+        body1.put("businessTypeId", "bt-1");
+        businessServiceService.createBusinessService(body1);
+
+        Map<String, Object> body2 = new LinkedHashMap<>();
+        body2.put("name", "Service2");
+        body2.put("code", "PAY");
+        body2.put("groupId", "group-2");
+        body2.put("businessTypeId", "bt-1");
+        Map<String, Object> created = businessServiceService.createBusinessService(body2);
+        String id = (String) created.get("id");
+
+        Map<String, Object> updates = new LinkedHashMap<>();
+        updates.put("code", "ORDER");
+
+        try {
+            businessServiceService.updateBusinessService(id, updates);
+            fail("Expected ConflictException for duplicate code");
+        } catch (ConflictException e) {
+            assertTrue(e.getMessage().contains("Business service code already exists"));
+        }
+    }
+
+    /**
+     * Tests update business service with same code succeeds.
+     */
+    @Test
+    public void testUpdateBusinessService_sameCode_succeeds() throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("name", "Service1");
+        body.put("code", "ORDER");
+        body.put("groupId", "group-1");
+        body.put("businessTypeId", "bt-1");
+        Map<String, Object> created = businessServiceService.createBusinessService(body);
+        String id = (String) created.get("id");
+
+        Map<String, Object> updates = new LinkedHashMap<>();
+        updates.put("code", "ORDER");
+
+        Map<String, Object> result = businessServiceService.updateBusinessService(id, updates);
+        assertEquals("ORDER", result.get("code"));
+    }
+
+    /**
+     * Tests update business service with empty code succeeds.
+     */
+    @Test
+    public void testUpdateBusinessService_emptyCode_succeeds() throws Exception {
+        Map<String, Object> body1 = new LinkedHashMap<>();
+        body1.put("name", "Service1");
+        body1.put("code", "ORDER");
+        body1.put("groupId", "group-1");
+        body1.put("businessTypeId", "bt-1");
+        businessServiceService.createBusinessService(body1);
+
+        Map<String, Object> body2 = new LinkedHashMap<>();
+        body2.put("name", "Service2");
+        body2.put("code", "PAY");
+        body2.put("groupId", "group-2");
+        body2.put("businessTypeId", "bt-1");
+        Map<String, Object> created = businessServiceService.createBusinessService(body2);
+        String id = (String) created.get("id");
+
+        Map<String, Object> updates = new LinkedHashMap<>();
+        updates.put("code", "");
+
+        Map<String, Object> result = businessServiceService.updateBusinessService(id, updates);
+        assertEquals("", result.get("code"));
     }
 
     // ── Helpers ────────────────────────────────────────────────────
