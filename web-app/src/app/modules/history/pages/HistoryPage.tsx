@@ -19,6 +19,7 @@ import { trackedFetch } from '../../../platform/logging/requestClient'
 import RenameSessionDialog from '../components/RenameSessionDialog'
 import SessionList, { type SessionWithAgent } from '../components/SessionList'
 import { useHistorySessions } from '../hooks/useHistorySessions'
+import { downloadBlobResponse } from '../../../../utils/download'
 
 type HistoryFilter = 'user' | 'scheduled' | 'agent_call' | 'all'
 
@@ -42,33 +43,6 @@ const TRACE_POLL_TIMEOUT_MS = 10 * 60 * 1000
 
 function wait(ms: number): Promise<void> {
     return new Promise(resolve => window.setTimeout(resolve, ms))
-}
-
-function getDownloadFilename(response: Response, fallback: string): string {
-    const disposition = response.headers.get('content-disposition')
-    const utf8Match = disposition?.match(/filename\*=UTF-8''([^;]+)/i)
-    if (utf8Match?.[1]) {
-        try {
-            return decodeURIComponent(utf8Match[1])
-        } catch {
-            return utf8Match[1]
-        }
-    }
-
-    const asciiMatch = disposition?.match(/filename="?([^";]+)"?/i)
-    return asciiMatch?.[1] || fallback
-}
-
-async function downloadBlobResponse(response: Response, fallbackName: string): Promise<void> {
-    const blob = await response.blob()
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = getDownloadFilename(response, fallbackName)
-    document.body.appendChild(anchor)
-    anchor.click()
-    anchor.remove()
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 async function getResponseError(response: Response): Promise<string> {

@@ -143,13 +143,15 @@ def _build_date_params(args: Dict[str, Any]) -> Dict[str, str]:
 
 
 DEFAULT_FIELDS_MAP: Dict[str, List[str]] = {
-    "incidents": ["ticket_id", "priority", "category", "assigned_to", "status",
-                  "response_time_minutes", "resolution_time_minutes", "opened_at", "closed_at"],
-    "changes": ["ticket_id", "change_type", "status", "category", "close_code", "incident_ids"],
-    "requests": ["ticket_id", "catalog_item", "status", "requester_dept",
-                 "resolution_time_minutes", "satisfaction_score"],
-    "problems": ["ticket_id", "status", "priority", "cause_code",
-                 "known_error", "workaround"],
+    "incidents": ["ticket_id", "title", "priority", "category", "assigned_to", "status",
+                  "response_time_minutes", "resolution_time_minutes", "opened_at", "closed_at",
+                  "close_notes"],
+    "changes": ["ticket_id", "title", "change_type", "status", "category",
+                "close_code", "close_notes", "incident_ids"],
+    "requests": ["ticket_id", "title", "catalog_item", "status", "requester_dept",
+                 "resolution_time_minutes", "satisfaction_score", "feedback"],
+    "problems": ["ticket_id", "title", "status", "priority", "cause_code",
+                 "root_cause", "known_error", "workaround"],
 }
 
 # Per-domain KPI fields to keep in get_all_metrics summary mode
@@ -215,14 +217,20 @@ def _handle_get_all_metrics(args: Dict[str, Any], config: RuntimeConfig) -> Any:
     params = _build_date_params(args)
     result = {}
     exec_raw = None
+    failed_domains = []
     for domain in VALID_METRICS_DOMAINS:
         domain_params = dict(params)
         if domain == "workforce":
             domain_params["personLimit"] = "10"
-        raw = _bi_request("GET", f"/metrics/{domain}", config, params=domain_params or None)
-        result[domain] = _extract_kpi_summary(domain, raw)
-        if domain == "executive":
-            exec_raw = raw
+        try:
+            raw = _bi_request("GET", f"/metrics/{domain}", config, params=domain_params or None)
+            result[domain] = _extract_kpi_summary(domain, raw)
+            if domain == "executive":
+                exec_raw = raw
+        except (ToolExecutionError, json.JSONDecodeError) as e:
+            failed_domains.append(domain)
+            LOGGER.error("Failed to fetch metrics", domain=domain, error=str(e))
+            result[domain] = {"error": f"Failed to fetch {domain} metrics: {e}"}
     # Inject data date range from executive monthlyTrend
     if exec_raw:
         trend = exec_raw.get("monthlyTrend", [])
@@ -231,6 +239,8 @@ def _handle_get_all_metrics(args: Dict[str, Any], config: RuntimeConfig) -> Any:
                 "from": trend[0].get("period", ""),
                 "to": trend[-1].get("period", ""),
             }
+    if failed_domains:
+        result["_warnings"] = [f"Metrics unavailable for: {', '.join(failed_domains)}. Try again in a moment."]
     return result
 
 
@@ -786,7 +796,17 @@ TOOLS = [
             "- Specific SLA-breached incidents, failed changes, low-CSAT requests, open problems\n"
             "- Ticket lists for a given person, category, or time range\n"
             "- Response time, resolution time, satisfaction score, and other detail fields\n"
-            "Note: For aggregate metrics (totals, rates, averages, distributions), prefer get_all_metrics or analyze_* tools."
+            "Note: For aggregate metrics (totals, rates, averages, distributions), prefer get_all_metrics or analyze_* tools.\n"
+            "Text fields for deeper analysis (include in 'fields' to request): "
+            "description (full ticket detail), "
+            "close_notes (resolution remarks), "
+            "feedback (user satisfaction comment, requests only), "
+            "root_cause (problem root cause, problems only), "
+            "implementation_plan / test_plan / backout_plan (changes only).\n"
+            "IMPORTANT: If previous tool calls used a date range (startDate/endDate), you MUST apply the SAME date range "
+            "here via opened_at filters (e.g. {\"field\":\"opened_at\",\"operator\":\"greater_than\",\"value\":\"2024-11-25\"} "
+            "and {\"field\":\"opened_at\",\"operator\":\"less_than\",\"value\":\"2024-12-01\"}). "
+            "Never query without date filters when the analysis is time-scoped."
         ),
         "inputSchema": {
             "type": "object",
@@ -813,7 +833,11 @@ TOOLS = [
             "- Custom aggregations not available in pre-computed metrics (e.g. incidents grouped by week)\n"
             "- Cross-dimension breakdowns (e.g. average CSAT per category)\n"
             "- Custom percentage calculations\n"
-            "Note: If the metric is already available in analyze_* tools, prefer those for richer context."
+            "Note: If the metric is already available in analyze_* tools, prefer those for richer context.\n"
+            "IMPORTANT: If previous tool calls used a date range (startDate/endDate), you MUST apply the SAME date range "
+            "here via opened_at filters (e.g. {\"field\":\"opened_at\",\"operator\":\"greater_than\",\"value\":\"2024-11-25\"} "
+            "and {\"field\":\"opened_at\",\"operator\":\"less_than\",\"value\":\"2024-12-01\"}). "
+            "Never query without date filters when the analysis is time-scoped."
         ),
         "inputSchema": {
             "type": "object",
@@ -1126,7 +1150,7 @@ def handle_request(message: Dict[str, Any], config: RuntimeConfig) -> Optional[D
         except ToolExecutionError as exc:
             LOGGER.error("Tool execution failed", tool=name, error=exc.internal_message)
             return make_success_response(request_id, format_tool_result(exc.public_message, is_error=True))
-        except Exception as exc:
+        except (TypeError, ValueError, AttributeError, IndexError) as exc:
             LOGGER.exception("Unhandled tool execution error", tool=name)
             return make_success_response(request_id, format_tool_result(f"Unhandled server error: {exc}", is_error=True))
 

@@ -21,10 +21,11 @@ describe('History page — connection error handling', () => {
         expect(src).toContain('useGoosed()')
     })
 
-    it('delegates loading state to useHistorySessions', () => {
+    it('delegates loading state to useHistorySessions and surfaces error', () => {
         const src = readSource('app/modules/history/pages/HistoryPage.tsx')
         expect(src).toContain('useHistorySessions({')
         expect(src).toContain('historySessions.isLoading')
+        expect(src).toContain('historySessions.error')
     })
 
     it('displays connectionError in the error banner', () => {

@@ -24,6 +24,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.apache.servicecomb.provider.rest.common.RestSchema;
 
 /**
@@ -36,6 +39,8 @@ import org.apache.servicecomb.provider.rest.common.RestSchema;
 @RestSchema(schemaId = "businessIntelligenceController")
 @RequestMapping("/api/business-intelligence")
 public class BusinessIntelligenceController {
+
+    private static final Logger log = LoggerFactory.getLogger(BusinessIntelligenceController.class);
 
     private final BusinessIntelligenceService businessIntelligenceService;
     private final BusinessIntelligenceMetricsService metricsService;
@@ -84,6 +89,31 @@ public class BusinessIntelligenceController {
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
             .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
             .body(new ByteArrayResource(bytes));
+    }
+
+    @GetMapping("/export-enhanced.xlsx")
+    public ResponseEntity<?> exportEnhancedWorkbook(
+        @RequestParam(value = "language", defaultValue = "zh") String language,
+        @RequestParam(value = "startDate", required = false) String startDate,
+        @RequestParam(value = "endDate", required = false) String endDate
+    ) {
+        try {
+            String normalizedLang = "en".equalsIgnoreCase(language) ? "en" : "zh";
+            byte[] bytes = businessIntelligenceService.exportEnhancedWorkbook(normalizedLang, startDate, endDate);
+            String langSuffix = "zh".equals(normalizedLang) ? "CN" : "EN";
+            String timestamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss").format(Instant.now().atZone(java.time.ZoneId.systemDefault()));
+            String filename = "BI_Dashboard_Export_" + timestamp + "_" + langSuffix + ".xlsx";
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(new ByteArrayResource(bytes));
+        } catch (IllegalArgumentException e) {
+            log.warn("Invalid export request: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", "Invalid export request"));
+        } catch (Exception e) {
+            log.error("Enhanced export failed", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", "Export failed"));
+        }
     }
 
     @GetMapping("/metrics/{domain}")

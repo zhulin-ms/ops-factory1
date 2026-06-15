@@ -5,6 +5,7 @@
 package com.huawei.opsfactory.businessintelligence.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import java.util.Map;
 
@@ -28,7 +29,7 @@ public final class MetricsModels {
 
     public record ProcessHealthScore(String process, double score, String tone) {}
 
-    public record RiskItem(String id, String priority, String title, String impact) {}
+    public record RiskItem(String id, String priority, String title, String impact, String process, String value) {}
 
     public record ExecutiveMetrics(
         double overallScore, String grade,
@@ -136,8 +137,8 @@ public final class MetricsModels {
     public record DataQueryRequest(
         List<FilterSpec> filters,
         List<String> fields,
-        String sortBy,
-        String sortOrder,
+        @JsonProperty("sort_by") String sortBy,
+        @JsonProperty("sort_order") String sortOrder,
         Integer limit,
         AggregateSpec aggregate
     ) {}
