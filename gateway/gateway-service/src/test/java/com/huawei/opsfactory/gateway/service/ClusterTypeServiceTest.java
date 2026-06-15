@@ -308,15 +308,16 @@ public class ClusterTypeServiceTest {
     }
 
     /**
-     * Tests create cluster type description contains xss.
+     * Tests create cluster type description allows xss characters.
      */
-    @Test(expected = IllegalArgumentException.class)
-    public void testCreateClusterType_descriptionXss() throws Exception {
+    @Test
+    public void testCreateClusterType_descriptionAllowsXssCharacters() throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", "Name");
         body.put("code", "CODE");
         body.put("description", "<script>alert(1)</script>");
-        clusterTypeService.createClusterType(body);
+        Map<String, Object> result = clusterTypeService.createClusterType(body);
+        assertEquals("<script>alert(1)</script>", result.get("description"));
     }
 
     /**
@@ -332,15 +333,16 @@ public class ClusterTypeServiceTest {
     }
 
     /**
-     * Tests create cluster type knowledge contains xss.
+     * Tests create cluster type knowledge allows xss characters.
      */
-    @Test(expected = IllegalArgumentException.class)
-    public void testCreateClusterType_knowledgeXss() throws Exception {
+    @Test
+    public void testCreateClusterType_knowledgeAllowsXssCharacters() throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", "Name");
         body.put("code", "CODE");
-        body.put("knowledge", "<script>");
-        clusterTypeService.createClusterType(body);
+        body.put("knowledge", "<script>alert('xss')</script>");
+        Map<String, Object> result = clusterTypeService.createClusterType(body);
+        assertEquals("<script>alert('xss')</script>", result.get("knowledge"));
     }
 
     /**
@@ -786,10 +788,10 @@ public class ClusterTypeServiceTest {
     }
 
     /**
-     * Tests update cluster type description contains xss.
+     * Tests update cluster type description allows xss characters.
      */
-    @Test(expected = IllegalArgumentException.class)
-    public void testUpdateClusterType_descriptionXss() throws Exception {
+    @Test
+    public void testUpdateClusterType_descriptionAllowsXssCharacters() throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", "Original");
         body.put("code", "ORIG");
@@ -797,8 +799,9 @@ public class ClusterTypeServiceTest {
         String id = (String) created.get("id");
 
         Map<String, Object> updates = new LinkedHashMap<>();
-        updates.put("description", "<script>alert(1)</script>");
-        clusterTypeService.updateClusterType(id, updates);
+        updates.put("description", "<img src=x onerror=alert(1)>");
+        Map<String, Object> result = clusterTypeService.updateClusterType(id, updates);
+        assertEquals("<img src=x onerror=alert(1)>", result.get("description"));
     }
 
     /**
@@ -818,10 +821,10 @@ public class ClusterTypeServiceTest {
     }
 
     /**
-     * Tests update cluster type knowledge contains xss.
+     * Tests update cluster type knowledge allows xss characters.
      */
-    @Test(expected = IllegalArgumentException.class)
-    public void testUpdateClusterType_knowledgeXss() throws Exception {
+    @Test
+    public void testUpdateClusterType_knowledgeAllowsXssCharacters() throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", "Original");
         body.put("code", "ORIG");
@@ -829,8 +832,9 @@ public class ClusterTypeServiceTest {
         String id = (String) created.get("id");
 
         Map<String, Object> updates = new LinkedHashMap<>();
-        updates.put("knowledge", "<script>");
-        clusterTypeService.updateClusterType(id, updates);
+        updates.put("knowledge", "<>\"'&`/");
+        Map<String, Object> result = clusterTypeService.updateClusterType(id, updates);
+        assertEquals("<>\"'&`/", result.get("knowledge"));
     }
 
     /**

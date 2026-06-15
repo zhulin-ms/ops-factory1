@@ -291,27 +291,29 @@ public class SolutionTypeServiceTest {
     }
 
     /**
-     * Tests create solution type description contains xss.
+     * Tests create solution type description allows xss characters.
      */
-    @Test(expected = IllegalArgumentException.class)
-    public void testCreateSolutionType_descriptionXss() throws Exception {
+    @Test
+    public void testCreateSolutionType_descriptionAllowsXssCharacters() throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", "Name");
         body.put("code", "CODE");
         body.put("description", "<script>alert(1)</script>");
-        solutionTypeService.createSolutionType(body);
+        Map<String, Object> result = solutionTypeService.createSolutionType(body);
+        assertEquals("<script>alert(1)</script>", result.get("description"));
     }
 
     /**
-     * Tests create solution type knowledge contains xss.
+     * Tests create solution type knowledge allows xss characters.
      */
-    @Test(expected = IllegalArgumentException.class)
-    public void testCreateSolutionType_knowledgeXss() throws Exception {
+    @Test
+    public void testCreateSolutionType_knowledgeAllowsXssCharacters() throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", "Name");
         body.put("code", "CODE");
-        body.put("knowledge", "<script>");
-        solutionTypeService.createSolutionType(body);
+        body.put("knowledge", "<>'\"&`/");
+        Map<String, Object> result = solutionTypeService.createSolutionType(body);
+        assertEquals("<>'\"&`/", result.get("knowledge"));
     }
 
     // ── updateSolutionType ─────────────────────────────────────────
@@ -523,10 +525,10 @@ public class SolutionTypeServiceTest {
     }
 
     /**
-     * Tests update solution type description contains xss.
+     * Tests update solution type description allows xss characters.
      */
-    @Test(expected = IllegalArgumentException.class)
-    public void testUpdateSolutionType_descriptionXss() throws Exception {
+    @Test
+    public void testUpdateSolutionType_descriptionAllowsXssCharacters() throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", "Original");
         body.put("code", "ORIG");
@@ -534,15 +536,16 @@ public class SolutionTypeServiceTest {
         String id = (String) created.get("id");
 
         Map<String, Object> updates = new LinkedHashMap<>();
-        updates.put("description", "<script>alert(1)</script>");
-        solutionTypeService.updateSolutionType(id, updates);
+        updates.put("description", "<img src=x onerror=alert(1)>");
+        Map<String, Object> result = solutionTypeService.updateSolutionType(id, updates);
+        assertEquals("<img src=x onerror=alert(1)>", result.get("description"));
     }
 
     /**
-     * Tests update solution type knowledge contains xss.
+     * Tests update solution type knowledge allows xss characters.
      */
-    @Test(expected = IllegalArgumentException.class)
-    public void testUpdateSolutionType_knowledgeXss() throws Exception {
+    @Test
+    public void testUpdateSolutionType_knowledgeAllowsXssCharacters() throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", "Original");
         body.put("code", "ORIG");
@@ -550,8 +553,9 @@ public class SolutionTypeServiceTest {
         String id = (String) created.get("id");
 
         Map<String, Object> updates = new LinkedHashMap<>();
-        updates.put("knowledge", "<script>");
-        solutionTypeService.updateSolutionType(id, updates);
+        updates.put("knowledge", "<script>alert('test')</script>");
+        Map<String, Object> result = solutionTypeService.updateSolutionType(id, updates);
+        assertEquals("<script>alert('test')</script>", result.get("knowledge"));
     }
 
     /**
