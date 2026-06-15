@@ -116,8 +116,8 @@ public class ClusterTypeService extends JsonFileEntityStore {
         validateNameAndCodeUnique(name, code, null);
 
         // Validate optional fields
-        String description = ValidationUtils.validateStringField(body, "description", "Description", 500, false);
-        String knowledge = ValidationUtils.validateStringField(body, "knowledge", "Knowledge", 2000, false);
+        String description = ValidationUtils.validateLengthOnly(body, "description", "Description", 500);
+        String knowledge = ValidationUtils.validateLengthOnly(body, "knowledge", "Knowledge", 2000);
         String commandPrefix = ValidationUtils.validateStringField(body, "commandPrefix", "Command prefix", 100, false);
 
         // Validate and extract mode
@@ -187,11 +187,11 @@ public class ClusterTypeService extends JsonFileEntityStore {
             ct.put("code", newCode);
         }
         if (body.containsKey("description")) {
-            String newDescription = ValidationUtils.validateStringField(body, "description", "Description", 500, false);
+            String newDescription = ValidationUtils.validateLengthOnly(body, "description", "Description", 500);
             ct.put("description", newDescription);
         }
         if (body.containsKey("knowledge")) {
-            String newKnowledge = ValidationUtils.validateStringField(body, "knowledge", "Knowledge", 2000, false);
+            String newKnowledge = ValidationUtils.validateLengthOnly(body, "knowledge", "Knowledge", 2000);
             ct.put("knowledge", newKnowledge);
         }
         if (body.containsKey("commandPrefix")) {

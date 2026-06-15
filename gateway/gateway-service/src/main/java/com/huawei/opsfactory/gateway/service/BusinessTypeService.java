@@ -101,8 +101,8 @@ public class BusinessTypeService extends JsonFileEntityStore {
         validateNameAndCodeUnique(name, code, null);
 
         // description and knowledge: length validation only, no XSS check
-        String description = validateLengthOnly(body, "description", "Description", 500);
-        String knowledge = validateLengthOnly(body, "knowledge", "Knowledge", 2000);
+        String description = ValidationUtils.validateLengthOnly(body, "description", "Description", 500);
+        String knowledge = ValidationUtils.validateLengthOnly(body, "knowledge", "Knowledge", 2000);
 
         Object colorObj = body.get("color");
         String color = (colorObj != null && !colorObj.toString().isBlank()) ? colorObj.toString() : "#6366f1";
@@ -151,7 +151,7 @@ public class BusinessTypeService extends JsonFileEntityStore {
             bt.put("name", newName);
         }
         if (body.containsKey("description")) {
-            String newDescription = validateLengthOnly(body, "description", "Description", 500);
+            String newDescription = ValidationUtils.validateLengthOnly(body, "description", "Description", 500);
             bt.put("description", newDescription);
         }
         if (body.containsKey("color")) {
@@ -161,7 +161,7 @@ public class BusinessTypeService extends JsonFileEntityStore {
             }
         }
         if (body.containsKey("knowledge")) {
-            String newKnowledge = validateLengthOnly(body, "knowledge", "Knowledge", 2000);
+            String newKnowledge = ValidationUtils.validateLengthOnly(body, "knowledge", "Knowledge", 2000);
             bt.put("knowledge", newKnowledge);
         }
 
@@ -223,29 +223,6 @@ public class BusinessTypeService extends JsonFileEntityStore {
                 }
             }
         }
-    }
-
-    /**
-     * Validates a field for length only, without XSS character check.
-     * Used for description and knowledge fields where XSS characters are allowed.
-     *
-     * @param body request body map
-     * @param field field name to extract
-     * @param displayName display name for error messages
-     * @param maxLength maximum allowed length (0 = no limit)
-     * @return the validated trimmed string, or empty string if missing/null
-     * @throws IllegalArgumentException if validation fails
-     */
-    private String validateLengthOnly(Map<String, Object> body, String field, String displayName, int maxLength) {
-        Object value = body.get(field);
-        if (value == null) {
-            return "";
-        }
-        String str = value.toString().trim();
-        if (maxLength > 0 && str.length() > maxLength) {
-            throw new IllegalArgumentException(displayName + " exceeds maximum length of " + maxLength);
-        }
-        return str;
     }
 
 }

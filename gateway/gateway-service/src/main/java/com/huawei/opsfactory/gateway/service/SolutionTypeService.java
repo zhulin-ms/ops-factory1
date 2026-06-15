@@ -114,8 +114,9 @@ public class SolutionTypeService extends JsonFileEntityStore {
         String code = ValidationUtils.validateStringField(body, "code", "Solution type code", 50, true);
         validateNameAndCodeUnique(name, code, null);
 
-        String description = ValidationUtils.validateStringField(body, "description", "Description", 500, false);
-        String knowledge = ValidationUtils.validateStringField(body, "knowledge", "Knowledge", 0, false);
+        // description and knowledge: length validation only, no XSS check
+        String description = ValidationUtils.validateLengthOnly(body, "description", "Description", 500);
+        String knowledge = ValidationUtils.validateLengthOnly(body, "knowledge", "Knowledge", 2000);
 
         String color = body.getOrDefault("color", "#8b5cf6").toString();
         if (!HEX_COLOR_PATTERN.matcher(color).matches()) {
@@ -168,7 +169,7 @@ public class SolutionTypeService extends JsonFileEntityStore {
             st.put("code", newCode);
         }
         if (body.containsKey("description")) {
-            String newDescription = ValidationUtils.validateStringField(body, "description", "Description", 500, false);
+            String newDescription = ValidationUtils.validateLengthOnly(body, "description", "Description", 500);
             st.put("description", newDescription);
         }
         if (body.containsKey("color")) {
@@ -183,7 +184,7 @@ public class SolutionTypeService extends JsonFileEntityStore {
             st.put("color", newColor);
         }
         if (body.containsKey("knowledge")) {
-            String newKnowledge = ValidationUtils.validateStringField(body, "knowledge", "Knowledge", 0, false);
+            String newKnowledge = ValidationUtils.validateLengthOnly(body, "knowledge", "Knowledge", 2000);
             st.put("knowledge", newKnowledge);
         }
 

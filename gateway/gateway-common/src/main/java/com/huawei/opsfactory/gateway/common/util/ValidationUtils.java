@@ -164,6 +164,29 @@ public final class ValidationUtils {
     }
 
     /**
+     * Validates a field for length only, without XSS character check.
+     * Used for description and knowledge fields where XSS characters are allowed.
+     *
+     * @param body the request body map
+     * @param field the field name to extract
+     * @param displayName display name for error messages
+     * @param maxLength maximum allowed length (0 = no limit)
+     * @return the validated trimmed string, or empty string if missing/null
+     * @throws IllegalArgumentException if validation fails
+     */
+    public static String validateLengthOnly(Map<String, Object> body, String field, String displayName, int maxLength) {
+        Object value = body.get(field);
+        if (value == null) {
+            return "";
+        }
+        String str = value.toString().trim();
+        if (maxLength > 0 && str.length() > maxLength) {
+            throw new IllegalArgumentException(displayName + " exceeds maximum length of " + maxLength);
+        }
+        return str;
+    }
+
+    /**
      * Validates that the list of maps has no duplicate values for the given key field.
      *
      * @param list list of maps to check

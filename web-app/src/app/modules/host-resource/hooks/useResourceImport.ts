@@ -224,6 +224,13 @@ export function useResourceImport(deps: ImportDeps) {
                                         continue
                                     }
                                 }
+                                if (row.knowledge) {
+                                    const knowledge = row.knowledge?.trim() || ''
+                                    if (knowledge.length > 2000) {
+                                        errors.push({ row: i + 2, code: 'import.knowledgeTooLong', params: { length: String(knowledge.length), max: '2000' } })
+                                        continue
+                                    }
+                                }
                                 if (row.clusterMode && row.clusterMode !== 'Peer' && row.clusterMode !== 'Primary-Backup') {
                                     errors.push({ row: i + 2, code: 'import.clusterTypeInvalidMode', params: { mode: row.clusterMode } })
                                     continue
@@ -383,6 +390,13 @@ export function useResourceImport(deps: ImportDeps) {
                                     const description = row.description?.trim() || ''
                                     if (description.length > 500) {
                                         errors.push({ row: i + 2, code: 'import.descriptionTooLong', params: { length: String(description.length) } })
+                                        continue
+                                    }
+                                }
+                                if (row.knowledge) {
+                                    const knowledge = row.knowledge?.trim() || ''
+                                    if (knowledge.length > 2000) {
+                                        errors.push({ row: i + 2, code: 'import.knowledgeTooLong', params: { length: String(knowledge.length), max: '2000' } })
                                         continue
                                     }
                                 }
