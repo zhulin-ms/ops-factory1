@@ -20,7 +20,12 @@ import com.huawei.opsfactory.businessintelligence.model.MetricsModels;
 import com.huawei.opsfactory.businessintelligence.model.MetricsModels.TrendResult;
 import com.huawei.opsfactory.businessintelligence.model.MetricsModels.TrendPoint;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.regex.Pattern;
 import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -71,14 +76,6 @@ public class BusinessIntelligenceService {
         new TabMeta("cross-process", "跨流程关联"),
         new TabMeta("workforce", "Workforce")
     );
-    private static final List<DateTimeFormatter> DATE_TIME_FORMATTERS = List.of(
-        DateTimeFormatter.ISO_DATE_TIME,
-        DateTimeFormatter.ofPattern("M/d/yyyy H:mm"),
-        DateTimeFormatter.ofPattern("M/d/yyyy H:mm:ss"),
-        DateTimeFormatter.ofPattern("M/d/yyyy h:mm:ss a", Locale.ENGLISH),
-        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
-        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
-    );
     private static final List<String> PRIORITY_ORDER = List.of("P1", "P2", "P3", "P4");
 
     private final BiDataProvider dataProvider;
@@ -86,38 +83,7 @@ public class BusinessIntelligenceService {
     private final BusinessIntelligenceMetricsService metricsService;
     private final AtomicReference<Snapshot> cache = new AtomicReference<>();
 
-    private record IncidentSlaRecord(
-        String orderNumber,
-        String orderName,
-        String priority,
-        String category,
-        String resolver,
-        LocalDateTime beginDate,
-        double responseMinutes,
-        double resolutionMinutes,
-        boolean responseMet,
-        boolean resolutionMet
-    ) {
-        private boolean overallMet() {
-            return responseMet && resolutionMet;
-        }
-
-        private boolean anyBreached() {
-            return !overallMet();
-        }
-
-        private String violationType() {
-            if (!responseMet && !resolutionMet) {
-                return "both_breached";
-            }
-            if (!responseMet) {
-                return "response_breached";
-            }
-            if (!resolutionMet) {
-                return "resolution_breached";
-            }
-            return "met";
-        }
+    private record IncidentBegin(Map<String, String> incident, LocalDateTime beginDate) {
     }
 
     public BusinessIntelligenceService(BiDataProvider dataProvider,
@@ -181,13 +147,24 @@ public class BusinessIntelligenceService {
         }
     }
 
+    private LocalDate parseDateInput(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        LocalDateTime dateTime = BiDateUtils.parseDate(value);
+        if (dateTime == null) {
+            throw new IllegalArgumentException("Invalid date value: " + value);
+        }
+        return dateTime.toLocalDate();
+    }
+
     private BiRawData filterByDateRange(BiRawData rawData, String startDate, String endDate) {
         if (startDate == null && endDate == null) {
             return rawData;
         }
 
-        LocalDate start = startDate != null ? LocalDate.parse(startDate) : null;
-        LocalDate end = endDate != null ? LocalDate.parse(endDate) : null;
+        LocalDate start = parseDateInput(startDate);
+        LocalDate end = parseDateInput(endDate);
 
         // Filter incidents
         List<Map<String, String>> filteredIncidents = rawData.incidents().stream()
@@ -219,7 +196,7 @@ public class BusinessIntelligenceService {
         if (dateStr == null || dateStr.isBlank()) {
             return true;
         }
-        LocalDateTime dateTime = parseDate(dateStr);
+        LocalDateTime dateTime = BiDateUtils.parseDate(dateStr);
         if (dateTime == null) {
             return true;
         }
@@ -294,6 +271,213 @@ public class BusinessIntelligenceService {
         }
     }
 
+    /**
+     * Export enhanced Excel workbook by invoking the Python generate_report.py script.
+     * The script calls BI API to fetch data and renders native charts via openpyxl.
+     */
+    public byte[] exportEnhancedWorkbook(String language, String startDate, String endDate) {
+        long startedAt = System.currentTimeMillis();
+        Path tempDir = null;
+        Path outputLog = null;
+        try {
+            String validLanguage = "en".equalsIgnoreCase(language) ? "en" : "zh";
+
+            // Validate dates before invoking Python (matches non-export paths).
+            if (startDate != null && !startDate.isBlank()) {
+                parseDateInput(startDate);
+            }
+            if (endDate != null && !endDate.isBlank()) {
+                parseDateInput(endDate);
+            }
+
+            tempDir = Files.createTempDirectory("bi-export-");
+
+            // Resolve the project directory: baseDir is "./data" relative to CWD,
+            // which is typically business-intelligence/scripts/ or business-intelligence/.
+            // We need to find the directory containing scripts/generate_report.py.
+            File baseDir = new File(runtimeProperties.getBaseDir()).getAbsoluteFile();
+            File projectDir = baseDir.getParentFile(); // should be business-intelligence/
+            File scriptFile = new File(projectDir, "scripts/generate_report.py");
+
+            // Fallback: if not found, try one level up (CWD might be business-intelligence/ itself)
+            if (!scriptFile.exists()) {
+                File altDir = projectDir.getParentFile();
+                File altScript = new File(altDir, "business-intelligence/scripts/generate_report.py");
+                if (altScript.exists()) {
+                    projectDir = new File(altDir, "business-intelligence");
+                    scriptFile = altScript;
+                }
+            }
+
+            if (!scriptFile.exists()) {
+                throw new IllegalStateException("Export script not found. Tried: " + scriptFile.getAbsolutePath());
+            }
+
+            preflightPythonEnvironment(projectDir);
+
+            // Build BI URL: prefer configured URL, fallback to localhost for local dev.
+            String configuredUrl = runtimeProperties.getExportBiUrl();
+            String biUrl;
+            if (configuredUrl != null && !configuredUrl.isBlank()) {
+                biUrl = configuredUrl;
+            } else {
+                biUrl = "http://localhost:" + System.getProperty("server.port", "8093");
+            }
+
+            java.util.List<String> command = new java.util.ArrayList<>(java.util.List.of(
+                "python3", scriptFile.getAbsolutePath(),
+                "--language", validLanguage,
+                "--bi-url", biUrl,
+                "--output-dir", tempDir.toString()
+            ));
+            if (startDate != null && !startDate.isBlank()) {
+                command.addAll(java.util.List.of("--start-date", startDate));
+            }
+            if (endDate != null && !endDate.isBlank()) {
+                command.addAll(java.util.List.of("--end-date", endDate));
+            }
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(true);
+            pb.directory(projectDir);
+
+            outputLog = Files.createTempFile("bi-export-", ".log");
+            pb.redirectOutput(outputLog.toFile());
+
+            Process process = pb.start();
+            boolean finished = process.waitFor(120, java.util.concurrent.TimeUnit.SECONDS);
+            String output = readOutputLog(outputLog);
+            if (!finished) {
+                process.destroyForcibly();
+                process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+                throw new IllegalStateException("Python export script timed out after 120s. Output: " + output);
+            }
+
+            int exitCode = process.exitValue();
+            if (exitCode != 0) {
+                log.error("Python export script failed exitCode={} output={}", exitCode, output);
+                throw new IllegalStateException("Python export script failed (exit " + exitCode + "): " + output);
+            }
+
+            // Find the generated .xlsx file in tempDir
+            Path xlsxFile = null;
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(tempDir, "*.xlsx")) {
+                for (Path entry : stream) {
+                    if (!entry.getFileName().toString().startsWith("~$")) {
+                        xlsxFile = entry;
+                        break;
+                    }
+                }
+            }
+
+            if (xlsxFile == null) {
+                throw new IllegalStateException("No .xlsx file generated in " + tempDir + ". Script output: " + output);
+            }
+
+            byte[] bytes = Files.readAllBytes(xlsxFile);
+            log.info("Enhanced export completed language={} byteSize={} durationMs={}", validLanguage, bytes.length, System.currentTimeMillis() - startedAt);
+            return bytes;
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Failed to run enhanced export: " + e.getMessage(), e);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to run enhanced export: " + e.getMessage(), e);
+        } finally {
+            if (outputLog != null) {
+                try {
+                    Files.deleteIfExists(outputLog);
+                } catch (IOException ignored) {
+                }
+            }
+            if (tempDir != null) {
+                deleteTempDir(tempDir);
+            }
+        }
+    }
+
+    private void deleteTempDir(Path tempDir) {
+        try {
+            Files.walkFileTree(tempDir, new java.nio.file.SimpleFileVisitor<>() {
+                @Override
+                public java.nio.file.FileVisitResult visitFile(Path file, java.nio.file.attribute.BasicFileAttributes attrs) {
+                    try {
+                        Files.deleteIfExists(file);
+                    } catch (IOException ex) {
+                        log.warn("Failed to delete temp file {}: {}", file, ex.getMessage());
+                    }
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult postVisitDirectory(Path dir, IOException exc) {
+                    try {
+                        Files.deleteIfExists(dir);
+                    } catch (IOException ex) {
+                        log.warn("Failed to delete temp directory {}: {}", dir, ex.getMessage());
+                    }
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            log.warn("Failed to walk temp directory {}: {}", tempDir, e.getMessage());
+        }
+    }
+
+    private static String readOutputLog(Path logFile) {
+        try {
+            return Files.readString(logFile);
+        } catch (IOException e) {
+            return "";
+        } finally {
+            try {
+                Files.deleteIfExists(logFile);
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    private void preflightPythonEnvironment(File projectDir) {
+        Path outputLog = null;
+        try {
+            outputLog = Files.createTempFile("bi-preflight-", ".log");
+            ProcessBuilder pb = new ProcessBuilder(
+                "python3", "-c",
+                "import openpyxl, lxml, requests; print('ok')"
+            );
+            pb.directory(projectDir);
+            pb.redirectErrorStream(true);
+            pb.redirectOutput(outputLog.toFile());
+            Process process = pb.start();
+            boolean finished = process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+            String output = readOutputLog(outputLog);
+            outputLog = null; // already deleted by readOutputLog
+            if (!finished) {
+                process.destroyForcibly();
+                throw new IllegalStateException("Python dependency check timed out. Output: " + output);
+            }
+            if (process.exitValue() != 0) {
+                throw new IllegalStateException(
+                    "Python export dependencies missing. Ensure python3 and openpyxl, lxml, requests are installed. Output: "
+                        + output.trim()
+                );
+            }
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw new IllegalStateException("Failed to verify Python export environment: " + e.getMessage(), e);
+        } finally {
+            if (outputLog != null) {
+                try {
+                    Files.deleteIfExists(outputLog);
+                } catch (IOException ignored) {
+                }
+            }
+        }
+    }
+
     private Snapshot buildSnapshot(BiRawData rawData, String startDate, String endDate) {
         Map<String, TabContent> contents = new LinkedHashMap<>();
         contents.put("executive-summary", buildExecutiveSummary(rawData));
@@ -313,14 +497,6 @@ public class BusinessIntelligenceService {
         var change = metricsService.getChangeMetrics(rawData);
         var request = metricsService.getRequestMetrics(rawData);
         var problem = metricsService.getProblemMetrics(rawData);
-
-        long incidentSlaBreached = incident.totalCount() - Math.round(incident.slaRate() * incident.totalCount());
-        long changeFailures = change.totalCount() - Math.round(change.successRate() * change.totalCount());
-        long requestOpen = rawData.requests().stream().filter(row -> {
-            String closeCode = clean(row.get(BiColumns.CLOSE_CODE));
-            return !("Fulfilled".equalsIgnoreCase(closeCode) || "Cancelled".equalsIgnoreCase(closeCode));
-        }).count();
-        long problemOpen = rawData.problems().stream().filter(row -> !matchesAny(clean(row.get(BiColumns.STATUS)), List.of("Resolved", "Closed"))).count();
 
         return new TabContent(
             "executive-summary",
@@ -345,20 +521,13 @@ public class BusinessIntelligenceService {
                     rawData.problems().isEmpty() ? "neutral" : toneFromScore(problem.closureRate(), 0.75, 0.55))
             ),
             List.of(),
-            List.of(
-                table("summary-risks", "关键关注项", List.of("指标", "当前值", "说明"), List.of(
-                    List.of("事件 SLA 违约", String.valueOf(incidentSlaBreached), "基于 incidents 数据中的 SLA 违约"),
-                    List.of("失败变更", String.valueOf(changeFailures), "基于 changes 数据中的 Success!=Yes"),
-                    List.of("未完成请求", String.valueOf(requestOpen), "基于 requests 的非 Fulfilled 状态"),
-                    List.of("未关闭问题", String.valueOf(problemOpen), "基于 problems 的非 Resolved/Closed 状态")
-                ))
-            )
+            List.of()
         );
     }
 
     private TabContent buildSlaAnalysis(BiRawData rawData, String startDate, String endDate) {
         // ── Incident SLA ──
-        List<IncidentSlaRecord> slaRecords = buildIncidentSlaRecords(rawData);
+        List<BusinessIntelligenceMetricsService.IncidentSlaRecord> slaRecords = metricsService.buildIncidentSlaRecords(rawData);
         BiModels.SlaAnalysisSummary summary = buildSlaAnalysisSummary(slaRecords);
 
         List<MetricCard> incidentCards = List.of(
@@ -383,8 +552,8 @@ public class BusinessIntelligenceService {
                 new ChartConfig(List.of("响应达成率", "解决达成率"), null, List.of("#10b981", "#5b8db8"), "优先级", "达成率(%)")),
             pieChart("violation-by-priority", "违约优先级分布",
                 slaRecords.stream()
-                    .filter(IncidentSlaRecord::anyBreached)
-                    .collect(Collectors.groupingBy(IncidentSlaRecord::priority, LinkedHashMap::new, Collectors.counting()))
+                    .filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::anyBreached)
+                    .collect(Collectors.groupingBy(BusinessIntelligenceMetricsService.IncidentSlaRecord::priority, LinkedHashMap::new, Collectors.counting()))
                     .entrySet().stream()
                     .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
                     .map(e -> new ChartDatum(e.getKey(), e.getValue()))
@@ -392,7 +561,7 @@ public class BusinessIntelligenceService {
                 List.of("#ef4444", "#f59e0b", "#eab308", "#10b981")),
             pieChart("violation-by-category", "违约事件类型分布",
                 slaRecords.stream()
-                    .filter(IncidentSlaRecord::anyBreached)
+                    .filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::anyBreached)
                     .collect(Collectors.groupingBy(r -> defaultLabel(r.category(), "未标注"), LinkedHashMap::new, Collectors.counting()))
                     .entrySet().stream()
                     .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
@@ -450,7 +619,6 @@ public class BusinessIntelligenceService {
 
     private TabContent buildIncidentAnalysis(BiRawData rawData, String startDate, String endDate, String granularity) {
         var m = metricsService.getIncidentMetrics(rawData);
-        List<IncidentSlaRecord> slaRecords = buildIncidentSlaRecords(rawData);
         List<Map<String, String>> incidents = rawData.incidents();
 
         List<ChartDatum> volumeTrend = buildVolumeTrend(rawData, startDate, endDate, granularity);
@@ -712,8 +880,8 @@ public class BusinessIntelligenceService {
             .map(entry -> {
                 long early = 0, onTime = 0, late = 0;
                 for (Map<String, String> row : entry.getValue()) {
-                    LocalDateTime plannedEnd = parseDate(row.get(BiColumns.PLANNED_END));
-                    LocalDateTime actualEnd = parseDate(row.get(BiColumns.ACTUAL_END));
+                    LocalDateTime plannedEnd = BiDateUtils.parseDate(row.get(BiColumns.PLANNED_END));
+                    LocalDateTime actualEnd = BiDateUtils.parseDate(row.get(BiColumns.ACTUAL_END));
                     if (plannedEnd == null || actualEnd == null) continue;
                     long diffHours = java.time.Duration.between(plannedEnd, actualEnd).toHours();
                     if (diffHours < -1) early++;
@@ -894,8 +1062,8 @@ public class BusinessIntelligenceService {
         // Group by week: count total and track cumulative unresolved
         List<Map<String, String>> sorted = new ArrayList<>(problems);
         sorted.sort((a, b) -> {
-            LocalDateTime da = parseDate(a.get(BiColumns.LOGGED_DATE));
-            LocalDateTime db = parseDate(b.get(BiColumns.LOGGED_DATE));
+            LocalDateTime da = BiDateUtils.parseDate(a.get(BiColumns.LOGGED_DATE));
+            LocalDateTime db = BiDateUtils.parseDate(b.get(BiColumns.LOGGED_DATE));
             if (da == null && db == null) return 0;
             if (da == null) return 1;
             if (db == null) return -1;
@@ -906,7 +1074,7 @@ public class BusinessIntelligenceService {
         Map<String, Long> resolvedByPeriod = new LinkedHashMap<>();
 
         for (Map<String, String> row : sorted) {
-            LocalDateTime date = parseDate(row.get(BiColumns.LOGGED_DATE));
+            LocalDateTime date = BiDateUtils.parseDate(row.get(BiColumns.LOGGED_DATE));
             if (date == null) continue;
             String period = formatPeriodLabel(date, "weekly");
             totalByPeriod.merge(period, 1L, Long::sum);
@@ -1057,32 +1225,15 @@ public class BusinessIntelligenceService {
             List.of(
                 table("cross-change-incident-detail", "变更致事件关联明细",
                     List.of("变更编号", "变更标题", "完成时间", "48h内P1/P2事件", "风险等级"),
-                    changes.stream()
-                        .filter(ch -> isNonEmpty(ch.get(BiColumns.INCIDENT_CAUSED)))
-                        .limit(15)
-                        .map(ch -> {
-                            LocalDateTime actualEnd = parseDate(ch.get(BiColumns.ACTUAL_END));
-                            String linkedIncidents = findIncidentsWithin48h(incidents, actualEnd).stream()
-                                .map(inc -> defaultLabel(inc.get(BiColumns.ORDER_NUMBER), ""))
-                                .filter(s -> !s.isBlank())
-                                .reduce((a, b) -> a + "," + b)
-                                .orElse("—");
-                            return List.of(
-                                defaultLabel(ch.get(BiColumns.CHANGE_NUMBER), "—"),
-                                defaultLabel(ch.get(BiColumns.TITLE), "—"),
-                                actualEnd != null ? actualEnd.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) : "—",
-                                linkedIncidents,
-                                defaultLabel(ch.get(BiColumns.RISK), "—")
-                            );
-                        }).toList()),
+                    buildCrossChangeIncidentDetailRows(changes, incidents)),
                 table("cross-aging-problems", "老化问题清单",
                     List.of("问题编号", "根因类别", "老化天数", "关联事件数", "优先级", "状态"),
                     problems.stream()
                         .map(row -> {
-                            LocalDateTime logged = parseDate(row.get(BiColumns.LOGGED_DATE));
+                            LocalDateTime logged = BiDateUtils.parseDate(row.get(BiColumns.LOGGED_DATE));
                             long agingDays = 0;
                             if (logged != null) {
-                                LocalDateTime resolved = parseDate(row.get(BiColumns.RESOLVED_AT));
+                                LocalDateTime resolved = BiDateUtils.parseDate(row.get(BiColumns.RESOLVED_AT));
                                 LocalDateTime end = resolved != null ? resolved : LocalDateTime.now();
                                 agingDays = java.time.Duration.between(logged, end).toDays();
                             }
@@ -1123,35 +1274,65 @@ public class BusinessIntelligenceService {
         );
     }
 
-    private List<Map<String, String>> findIncidentsWithin48h(List<Map<String, String>> incidents, LocalDateTime changeEnd) {
-        if (changeEnd == null) return List.of();
+    private List<IncidentBegin> filterP1P2IncidentBegins(List<Map<String, String>> incidents) {
         return incidents.stream()
-            .filter(inc -> {
-                LocalDateTime incBegin = parseDate(inc.get(BiColumns.BEGIN_DATE));
-                if (incBegin == null) return false;
-                String priority = clean(inc.get(BiColumns.PRIORITY));
-                if (!"P1".equalsIgnoreCase(priority) && !"P2".equalsIgnoreCase(priority)) return false;
-                long hours = java.time.Duration.between(changeEnd, incBegin).toHours();
-                return hours > 0 && hours <= 48;
+            .map(inc -> new IncidentBegin(inc, BiDateUtils.parseDate(inc.get(BiColumns.BEGIN_DATE))))
+            .filter(ib -> ib.beginDate() != null)
+            .filter(ib -> {
+                String priority = clean(ib.incident().get(BiColumns.PRIORITY));
+                return "P1".equalsIgnoreCase(priority) || "P2".equalsIgnoreCase(priority);
             })
             .collect(Collectors.toList());
     }
 
+    private List<Map<String, String>> findIncidentsWithin48h(List<IncidentBegin> incidentBegins, LocalDateTime changeEnd) {
+        if (changeEnd == null) return List.of();
+        return incidentBegins.stream()
+            .filter(ib -> {
+                long hours = java.time.Duration.between(changeEnd, ib.beginDate()).toHours();
+                return hours > 0 && hours <= 48;
+            })
+            .map(IncidentBegin::incident)
+            .collect(Collectors.toList());
+    }
+
+    private List<List<String>> buildCrossChangeIncidentDetailRows(List<Map<String, String>> changes, List<Map<String, String>> incidents) {
+        List<IncidentBegin> p1p2Begins = filterP1P2IncidentBegins(incidents);
+        return changes.stream()
+            .filter(ch -> isNonEmpty(ch.get(BiColumns.INCIDENT_CAUSED)))
+            .limit(15)
+            .map(ch -> {
+                LocalDateTime actualEnd = BiDateUtils.parseDate(ch.get(BiColumns.ACTUAL_END));
+                String linkedIncidents = findIncidentsWithin48h(p1p2Begins, actualEnd).stream()
+                    .map(inc -> defaultLabel(inc.get(BiColumns.ORDER_NUMBER), ""))
+                    .filter(s -> !s.isBlank())
+                    .reduce((a, b) -> a + "," + b)
+                    .orElse("—");
+                return List.of(
+                    defaultLabel(ch.get(BiColumns.CHANGE_NUMBER), "—"),
+                    defaultLabel(ch.get(BiColumns.TITLE), "—"),
+                    actualEnd != null ? actualEnd.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) : "—",
+                    linkedIncidents,
+                    defaultLabel(ch.get(BiColumns.RISK), "—")
+                );
+            }).toList();
+    }
+
     private List<ChartDatum> buildChangeIncidentTrendData(BiRawData rawData) {
         List<Map<String, String>> changes = rawData.changes();
-        List<Map<String, String>> incidents = rawData.incidents();
+        List<IncidentBegin> p1p2Begins = filterP1P2IncidentBegins(rawData.incidents());
 
         Map<String, Long> changeByWeek = new LinkedHashMap<>();
         Map<String, Long> causedByWeek = new LinkedHashMap<>();
 
         for (Map<String, String> ch : changes) {
-            LocalDateTime date = parseDate(ch.get(BiColumns.REQUESTED_DATE));
-            if (date == null) date = parseDate(ch.get(BiColumns.ACTUAL_END));
+            LocalDateTime date = BiDateUtils.parseDate(ch.get(BiColumns.REQUESTED_DATE));
+            if (date == null) date = BiDateUtils.parseDate(ch.get(BiColumns.ACTUAL_END));
             if (date == null) continue;
             String week = formatPeriodLabel(date, "weekly");
             changeByWeek.merge(week, 1L, Long::sum);
-            LocalDateTime actualEnd = parseDate(ch.get(BiColumns.ACTUAL_END));
-            long p1p2 = findIncidentsWithin48h(incidents, actualEnd).size();
+            LocalDateTime actualEnd = BiDateUtils.parseDate(ch.get(BiColumns.ACTUAL_END));
+            long p1p2 = findIncidentsWithin48h(p1p2Begins, actualEnd).size();
             causedByWeek.merge(week, p1p2, Long::sum);
         }
 
@@ -1167,7 +1348,7 @@ public class BusinessIntelligenceService {
 
     private List<ChartDatum> buildChangeHeatmapData(BiRawData rawData) {
         List<Map<String, String>> changes = rawData.changes();
-        List<Map<String, String>> incidents = rawData.incidents();
+        List<IncidentBegin> p1p2Begins = filterP1P2IncidentBegins(rawData.incidents());
 
         // Build 7x24 grid: key = "dow|hour", value = [changeCount, incidentCount]
         Map<String, long[]> grid = new LinkedHashMap<>();
@@ -1178,17 +1359,17 @@ public class BusinessIntelligenceService {
         }
 
         for (Map<String, String> ch : changes) {
-            LocalDateTime date = parseDate(ch.get(BiColumns.ACTUAL_START));
+            LocalDateTime date = BiDateUtils.parseDate(ch.get(BiColumns.ACTUAL_START));
             if (date == null) continue;
             int dow = date.getDayOfWeek().getValue(); // 1=Mon, 7=Sun
             int hour = date.getHour();
             String key = dow + "|" + hour;
             grid.get(key)[0]++;
             if (isNonEmpty(ch.get(BiColumns.INCIDENT_CAUSED))) {
-                LocalDateTime actualEnd = parseDate(ch.get(BiColumns.ACTUAL_END));
-                List<Map<String, String>> linked = findIncidentsWithin48h(incidents, actualEnd);
+                LocalDateTime actualEnd = BiDateUtils.parseDate(ch.get(BiColumns.ACTUAL_END));
+                List<Map<String, String>> linked = findIncidentsWithin48h(p1p2Begins, actualEnd);
                 for (Map<String, String> inc : linked) {
-                    LocalDateTime incBegin = parseDate(inc.get(BiColumns.BEGIN_DATE));
+                    LocalDateTime incBegin = BiDateUtils.parseDate(inc.get(BiColumns.BEGIN_DATE));
                     if (incBegin == null) continue;
                     int incDow = incBegin.getDayOfWeek().getValue();
                     int incHour = incBegin.getHour();
@@ -1225,9 +1406,9 @@ public class BusinessIntelligenceService {
             double avgAging = probs.stream()
                 .filter(row -> !matchesAny(clean(row.get(BiColumns.STATUS)), List.of("Resolved", "Closed")))
                 .mapToLong(row -> {
-                    LocalDateTime logged = parseDate(row.get(BiColumns.LOGGED_DATE));
+                    LocalDateTime logged = BiDateUtils.parseDate(row.get(BiColumns.LOGGED_DATE));
                     if (logged == null) return 0;
-                    LocalDateTime resolved = parseDate(row.get(BiColumns.RESOLVED_AT));
+                    LocalDateTime resolved = BiDateUtils.parseDate(row.get(BiColumns.RESOLVED_AT));
                     LocalDateTime end = resolved != null ? resolved : LocalDateTime.now();
                     return java.time.Duration.between(logged, end).toDays();
                 }).average().orElse(0);
@@ -1257,7 +1438,7 @@ public class BusinessIntelligenceService {
     private List<ChartDatum> buildRequestIncidentOverlap(BiRawData rawData) {
         Map<String, Long> requestByWeek = new LinkedHashMap<>();
         for (Map<String, String> req : rawData.requests()) {
-            LocalDateTime date = parseDate(req.get(BiColumns.REQUESTED_DATE));
+            LocalDateTime date = BiDateUtils.parseDate(req.get(BiColumns.REQUESTED_DATE));
             if (date == null) continue;
             String week = formatPeriodLabel(date, "weekly");
             requestByWeek.merge(week, 1L, Long::sum);
@@ -1265,7 +1446,7 @@ public class BusinessIntelligenceService {
 
         Map<String, Long> incidentByWeek = new LinkedHashMap<>();
         for (Map<String, String> inc : rawData.incidents()) {
-            LocalDateTime date = parseDate(inc.get(BiColumns.BEGIN_DATE));
+            LocalDateTime date = BiDateUtils.parseDate(inc.get(BiColumns.BEGIN_DATE));
             if (date == null) continue;
             String week = formatPeriodLabel(date, "weekly");
             incidentByWeek.merge(week, 1L, Long::sum);
@@ -1290,15 +1471,15 @@ public class BusinessIntelligenceService {
         String lastWeek = formatPeriodLabel(now.minusDays(7), "weekly");
 
         Map<String, Long> thisWeekReqs = rawData.requests().stream()
-            .filter(r -> parseDate(r.get(BiColumns.REQUESTED_DATE)) != null && formatPeriodLabel(parseDate(r.get(BiColumns.REQUESTED_DATE)), "weekly").equals(thisWeek))
+            .filter(r -> BiDateUtils.parseDate(r.get(BiColumns.REQUESTED_DATE)) != null && formatPeriodLabel(BiDateUtils.parseDate(r.get(BiColumns.REQUESTED_DATE)), "weekly").equals(thisWeek))
             .collect(Collectors.groupingBy(r -> defaultLabel(r.get(BiColumns.CATEGORY), "未标注"), Collectors.counting()));
 
         Map<String, Long> lastWeekReqs = rawData.requests().stream()
-            .filter(r -> parseDate(r.get(BiColumns.REQUESTED_DATE)) != null && formatPeriodLabel(parseDate(r.get(BiColumns.REQUESTED_DATE)), "weekly").equals(lastWeek))
+            .filter(r -> BiDateUtils.parseDate(r.get(BiColumns.REQUESTED_DATE)) != null && formatPeriodLabel(BiDateUtils.parseDate(r.get(BiColumns.REQUESTED_DATE)), "weekly").equals(lastWeek))
             .collect(Collectors.groupingBy(r -> defaultLabel(r.get(BiColumns.CATEGORY), "未标注"), Collectors.counting()));
 
         long thisWeekIncidents = rawData.incidents().stream()
-            .filter(inc -> parseDate(inc.get(BiColumns.BEGIN_DATE)) != null && formatPeriodLabel(parseDate(inc.get(BiColumns.BEGIN_DATE)), "weekly").equals(thisWeek))
+            .filter(inc -> BiDateUtils.parseDate(inc.get(BiColumns.BEGIN_DATE)) != null && formatPeriodLabel(BiDateUtils.parseDate(inc.get(BiColumns.BEGIN_DATE)), "weekly").equals(thisWeek))
             .count();
 
         Set<String> allCats = new TreeSet<>(thisWeekReqs.keySet());
@@ -1364,13 +1545,6 @@ public class BusinessIntelligenceService {
         if (score >= threshold) return "success";
         if (score >= threshold * 0.7) return "warning";
         return "danger";
-    }
-
-    private double parseDurationMinutes(String startStr, String endStr) {
-        LocalDateTime start = parseDate(startStr);
-        LocalDateTime end = parseDate(endStr);
-        if (start == null || end == null || !end.isAfter(start)) return 0;
-        return java.time.Duration.between(start, end).toMinutes();
     }
 
     // ── Workforce chart builders ───────────────────────────────────────
@@ -1609,7 +1783,7 @@ public class BusinessIntelligenceService {
         boolean hasProblems = !rawData.problems().isEmpty();
 
         List<BiModels.ExecutiveRisk> risks = exec.topRisks().stream()
-            .map(r -> new BiModels.ExecutiveRisk(r.id(), r.priority(), r.title(), r.impact(), "", ""))
+            .map(r -> new BiModels.ExecutiveRisk(r.id(), r.priority(), r.title(), r.impact(), r.process(), r.value()))
             .toList();
 
         BiModels.RiskSummary riskSummary = new BiModels.RiskSummary(
@@ -1667,24 +1841,24 @@ public class BusinessIntelligenceService {
         return new BiModels.TableSection(id, title, columns, rows);
     }
 
-    private BiModels.SlaAnalysisSummary buildSlaAnalysisSummary(List<IncidentSlaRecord> incidents) {
+    private BiModels.SlaAnalysisSummary buildSlaAnalysisSummary(List<BusinessIntelligenceMetricsService.IncidentSlaRecord> incidents) {
         long responseBreached = incidents.stream().filter(record -> !record.responseMet()).count();
         long resolutionBreached = incidents.stream().filter(record -> !record.resolutionMet()).count();
         long bothBreached = incidents.stream().filter(record -> !record.responseMet() && !record.resolutionMet()).count();
-        long overallBreached = incidents.stream().filter(IncidentSlaRecord::anyBreached).count();
-        double overallRate = percentageValue(incidents.stream().filter(IncidentSlaRecord::overallMet).count(), incidents.size());
-        double responseRate = percentageValue(incidents.stream().filter(IncidentSlaRecord::responseMet).count(), incidents.size());
-        double resolutionRate = percentageValue(incidents.stream().filter(IncidentSlaRecord::resolutionMet).count(), incidents.size());
-        List<IncidentSlaRecord> highPriority = incidents.stream().filter(record -> matchesAny(record.priority(), List.of("P1", "P2"))).toList();
-        double highPriorityRate = percentageValue(highPriority.stream().filter(IncidentSlaRecord::overallMet).count(), highPriority.size());
+        long overallBreached = incidents.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::anyBreached).count();
+        double overallRate = percentageValue(incidents.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::overallMet).count(), incidents.size());
+        double responseRate = percentageValue(incidents.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::responseMet).count(), incidents.size());
+        double resolutionRate = percentageValue(incidents.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::resolutionMet).count(), incidents.size());
+        List<BusinessIntelligenceMetricsService.IncidentSlaRecord> highPriority = incidents.stream().filter(record -> matchesAny(record.priority(), List.of("P1", "P2"))).toList();
+        double highPriorityRate = percentageValue(highPriority.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::overallMet).count(), highPriority.size());
 
         List<BiModels.SlaPriorityRow> priorityRows = PRIORITY_ORDER.stream()
             .map(priority -> buildPriorityRow(priority, incidents.stream().filter(record -> priority.equalsIgnoreCase(record.priority())).toList()))
             .filter(Objects::nonNull)
             .toList();
 
-        List<BiModels.SlaRiskRow> categoryRisks = rankSlaRisks(incidents, IncidentSlaRecord::category);
-        List<BiModels.SlaRiskRow> resolverRisks = rankSlaRisks(incidents, IncidentSlaRecord::resolver);
+        List<BiModels.SlaRiskRow> categoryRisks = rankSlaRisks(incidents, BusinessIntelligenceMetricsService.IncidentSlaRecord::category);
+        List<BiModels.SlaRiskRow> resolverRisks = rankSlaRisks(incidents, BusinessIntelligenceMetricsService.IncidentSlaRecord::resolver);
         List<BiModels.SlaTrendPoint> trends = buildSlaTrendPoints(incidents);
 
         String summary = buildSlaSummarySentence(responseRate, resolutionRate, priorityRows, categoryRisks);
@@ -1697,8 +1871,8 @@ public class BusinessIntelligenceService {
                 overallBreached,
                 percentage(highPriorityRate)
             ),
-            buildSlaDimensionCard("响应 SLA", responseRate, incidents.stream().mapToDouble(IncidentSlaRecord::responseMinutes).average().orElse(0), percentile(incidents.stream().map(IncidentSlaRecord::responseMinutes).toList(), 0.9), responseBreached),
-            buildSlaDimensionCard("解决 SLA", resolutionRate, incidents.stream().mapToDouble(IncidentSlaRecord::resolutionMinutes).average().orElse(0), percentile(incidents.stream().map(IncidentSlaRecord::resolutionMinutes).toList(), 0.9), resolutionBreached),
+            buildSlaDimensionCard("响应 SLA", responseRate, incidents.stream().mapToDouble(BusinessIntelligenceMetricsService.IncidentSlaRecord::responseMinutes).average().orElse(0), percentile(incidents.stream().map(BusinessIntelligenceMetricsService.IncidentSlaRecord::responseMinutes).toList(), 0.9), responseBreached),
+            buildSlaDimensionCard("解决 SLA", resolutionRate, incidents.stream().mapToDouble(BusinessIntelligenceMetricsService.IncidentSlaRecord::resolutionMinutes).average().orElse(0), percentile(incidents.stream().map(BusinessIntelligenceMetricsService.IncidentSlaRecord::resolutionMinutes).toList(), 0.9), resolutionBreached),
             priorityRows,
             new BiModels.SlaComparisonChart("优先级响应 vs 解决对比", priorityRows.stream()
                 .map(row -> new BiModels.SlaComparisonDatum(
@@ -1711,11 +1885,11 @@ public class BusinessIntelligenceService {
             trends,
             new BiModels.SlaViolationBreakdown(responseBreached, resolutionBreached, bothBreached),
             incidents.stream()
-                .filter(IncidentSlaRecord::anyBreached)
+                .filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::anyBreached)
                 .sorted(Comparator
-                    .comparing((IncidentSlaRecord record) -> priorityRank(record.priority()))
-                    .thenComparing((IncidentSlaRecord record) -> violationSeverity(record.violationType()))
-                    .thenComparing(IncidentSlaRecord::resolutionMinutes, Comparator.reverseOrder()))
+                    .comparing((BusinessIntelligenceMetricsService.IncidentSlaRecord record) -> priorityRank(record.priority()))
+                    .thenComparing((BusinessIntelligenceMetricsService.IncidentSlaRecord record) -> violationSeverity(record.violationType()))
+                    .thenComparing(BusinessIntelligenceMetricsService.IncidentSlaRecord::resolutionMinutes, Comparator.reverseOrder()))
                 .limit(12)
                 .map(record -> new BiModels.SlaViolationSample(
                     defaultLabel(record.orderNumber(), "—"),
@@ -1730,68 +1904,17 @@ public class BusinessIntelligenceService {
         );
     }
 
-    private List<IncidentSlaRecord> buildIncidentSlaRecords(BiRawData rawData) {
-        Map<String, Double> responseCriteria = buildIncidentCriteriaMap(rawData.incidentSlaCriteria(), List.of("response_sla_min"));
-        Map<String, Double> resolutionCriteria = buildIncidentCriteriaMap(rawData.incidentSlaCriteria(), List.of("resolution_sla_min"));
-        return rawData.incidents().stream()
-            .map(row -> {
-                String priority = clean(row.get("priority"));
-                Double responseTarget = responseCriteria.get(priority);
-                Double resolutionTarget = resolutionCriteria.get(priority);
-                if (priority.isBlank() || responseTarget == null || resolutionTarget == null) {
-                    return null;
-                }
-                double responseMinutes = parseDouble(row.get("response_time_minutes"));
-                double resolutionMinutes = parseDouble(row.get("resolution_time_minutes"));
-                return new IncidentSlaRecord(
-                    row.get("ticket_id"),
-                    row.get(BiColumns.TITLE),
-                    priority,
-                    row.get("category"),
-                    row.get(BiColumns.ASSIGNED_TO),
-                    parseDate(row.get("opened_at")),
-                    responseMinutes,
-                    resolutionMinutes,
-                    responseMinutes <= responseTarget,
-                    resolutionMinutes <= resolutionTarget
-                );
-            })
-            .filter(Objects::nonNull)
-            .toList();
-    }
-
-    private Map<String, Double> buildIncidentCriteriaMap(List<Map<String, String>> rows, List<String> candidateKeys) {
-        return rows.stream()
-            .filter(row -> !clean(row.get("priority")).isBlank())
-            .collect(Collectors.toMap(
-                row -> clean(row.get("priority")),
-                row -> parseDouble(findFirstValue(row, candidateKeys)),
-                (left, right) -> right,
-                LinkedHashMap::new
-            ));
-    }
-
-    private String findFirstValue(Map<String, String> row, List<String> candidateKeys) {
-        for (String key : candidateKeys) {
-            String value = clean(row.get(key));
-            if (!value.isBlank()) {
-                return value;
-            }
-        }
-        return "";
-    }
-
-    private BiModels.SlaPriorityRow buildPriorityRow(String priority, List<IncidentSlaRecord> rows) {
+    private BiModels.SlaPriorityRow buildPriorityRow(String priority, List<BusinessIntelligenceMetricsService.IncidentSlaRecord> rows) {
         if (rows.isEmpty()) {
             return null;
         }
         return new BiModels.SlaPriorityRow(
             priority,
             rows.size(),
-            percentage(percentageValue(rows.stream().filter(IncidentSlaRecord::responseMet).count(), rows.size())),
-            percentage(percentageValue(rows.stream().filter(IncidentSlaRecord::resolutionMet).count(), rows.size())),
-            rows.stream().filter(IncidentSlaRecord::anyBreached).count(),
-            formatHours(rows.stream().mapToDouble(IncidentSlaRecord::resolutionMinutes).average().orElse(0) / 60.0)
+            percentage(percentageValue(rows.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::responseMet).count(), rows.size())),
+            percentage(percentageValue(rows.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::resolutionMet).count(), rows.size())),
+            rows.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::anyBreached).count(),
+            formatHours(rows.stream().mapToDouble(BusinessIntelligenceMetricsService.IncidentSlaRecord::resolutionMinutes).average().orElse(0) / 60.0)
         );
     }
 
@@ -1807,24 +1930,24 @@ public class BusinessIntelligenceService {
         );
     }
 
-    private List<BiModels.SlaRiskRow> rankSlaRisks(List<IncidentSlaRecord> incidents, Function<IncidentSlaRecord, String> classifier) {
+    private List<BiModels.SlaRiskRow> rankSlaRisks(List<BusinessIntelligenceMetricsService.IncidentSlaRecord> incidents, Function<BusinessIntelligenceMetricsService.IncidentSlaRecord, String> classifier) {
         return incidents.stream()
             .collect(Collectors.groupingBy(record -> defaultLabel(classifier.apply(record), "未标注"), LinkedHashMap::new, Collectors.toList()))
             .entrySet()
             .stream()
             .map(entry -> {
-                List<IncidentSlaRecord> rows = entry.getValue();
-                long breachedCount = rows.stream().filter(IncidentSlaRecord::anyBreached).count();
-                double resolutionRate = percentageValue(rows.stream().filter(IncidentSlaRecord::resolutionMet).count(), rows.size());
+                List<BusinessIntelligenceMetricsService.IncidentSlaRecord> rows = entry.getValue();
+                long breachedCount = rows.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::anyBreached).count();
+                double resolutionRate = percentageValue(rows.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::resolutionMet).count(), rows.size());
                 return Map.entry(
                     breachedCount * 1000 + Math.round((1 - resolutionRate) * 100) + rows.size(),
                     new BiModels.SlaRiskRow(
                         entry.getKey(),
                         rows.size(),
-                        percentage(percentageValue(rows.stream().filter(IncidentSlaRecord::responseMet).count(), rows.size())),
+                        percentage(percentageValue(rows.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::responseMet).count(), rows.size())),
                         percentage(resolutionRate),
                         breachedCount,
-                        formatHours(rows.stream().mapToDouble(IncidentSlaRecord::resolutionMinutes).average().orElse(0) / 60.0)
+                        formatHours(rows.stream().mapToDouble(BusinessIntelligenceMetricsService.IncidentSlaRecord::resolutionMinutes).average().orElse(0) / 60.0)
                     )
                 );
             })
@@ -1834,7 +1957,7 @@ public class BusinessIntelligenceService {
             .toList();
     }
 
-    private List<BiModels.SlaTrendPoint> buildSlaTrendPoints(List<IncidentSlaRecord> incidents) {
+    private List<BiModels.SlaTrendPoint> buildSlaTrendPoints(List<BusinessIntelligenceMetricsService.IncidentSlaRecord> incidents) {
         return incidents.stream()
             .filter(record -> record.beginDate() != null)
             .collect(Collectors.groupingBy(record -> YearMonth.from(record.beginDate()), LinkedHashMap::new, Collectors.toList()))
@@ -1842,13 +1965,13 @@ public class BusinessIntelligenceService {
             .stream()
             .sorted(Map.Entry.comparingByKey())
             .map(entry -> {
-                List<IncidentSlaRecord> rows = entry.getValue();
+                List<BusinessIntelligenceMetricsService.IncidentSlaRecord> rows = entry.getValue();
                 return new BiModels.SlaTrendPoint(
                     entry.getKey().toString(),
-                    parsePercentage(percentage(percentageValue(rows.stream().filter(IncidentSlaRecord::overallMet).count(), rows.size()))),
-                    parsePercentage(percentage(percentageValue(rows.stream().filter(IncidentSlaRecord::responseMet).count(), rows.size()))),
-                    parsePercentage(percentage(percentageValue(rows.stream().filter(IncidentSlaRecord::resolutionMet).count(), rows.size()))),
-                    rows.stream().filter(IncidentSlaRecord::anyBreached).count()
+                    parsePercentage(percentage(percentageValue(rows.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::overallMet).count(), rows.size()))),
+                    parsePercentage(percentage(percentageValue(rows.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::responseMet).count(), rows.size()))),
+                    parsePercentage(percentage(percentageValue(rows.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::resolutionMet).count(), rows.size()))),
+                    rows.stream().filter(BusinessIntelligenceMetricsService.IncidentSlaRecord::anyBreached).count()
                 );
             })
             .toList();
@@ -2213,30 +2336,7 @@ public class BusinessIntelligenceService {
     }
 
     private void addDates(List<LocalDateTime> target, List<Map<String, String>> rows, String key) {
-        rows.stream().map(row -> parseDate(row.get(key))).filter(Objects::nonNull).forEach(target::add);
-    }
-
-    private LocalDateTime parseDate(String value) {
-        String normalized = clean(value);
-        if (normalized.isBlank()) {
-            return null;
-        }
-        for (DateTimeFormatter formatter : DATE_TIME_FORMATTERS) {
-            try {
-                return LocalDateTime.parse(normalized, formatter);
-            } catch (DateTimeParseException ignored) {
-            }
-        }
-        try {
-            return LocalDate.parse(normalized).atStartOfDay();
-        } catch (DateTimeParseException ignored) {
-        }
-        try {
-            double excelDate = Double.parseDouble(normalized);
-            return LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(Math.round((excelDate - 25569) * 86400000L)), ZoneOffset.UTC);
-        } catch (NumberFormatException ignored) {
-        }
-        return null;
+        rows.stream().map(row -> BiDateUtils.parseDate(row.get(key))).filter(Objects::nonNull).forEach(target::add);
     }
 
     private String safeSheetName(String value) {

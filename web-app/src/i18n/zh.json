@@ -104,6 +104,9 @@
     "serviceUnavailable": "业务智能服务不可用或配置错误（{{status}} {{statusText}}）。",
     "invalidJsonResponse": "业务智能接口返回了 HTML 而不是 JSON，请检查 businessIntelligenceServiceUrl 或开发代理配置。",
     "download": "下载 Excel",
+    "exporting": "导出中...",
+    "exportSuccess": "Excel 报告导出成功",
+    "exportFailed": "导出失败：{{error}}",
     "lastUpdated": "最近更新时间",
     "reportingPeriod": "统计周期",
     "reportingPeriods": {
@@ -116,6 +119,7 @@
       "custom": "自定义"
     },
     "dateRangeSeparator": "至",
+    "invalidDateRange": "开始日期不能晚于结束日期。",
     "year": "年",
     "month": "月",
     "day": "日",
@@ -176,6 +180,7 @@
       "warning": "预警",
       "attention": "关注",
       "priority": "优先级",
+      "riskTitle": "风险项",
       "impact": "影响",
       "process": "所属流程",
       "currentValue": "当前值",
@@ -224,14 +229,22 @@
         "problem-closure": "问题关闭率不足",
         "request-open": "未完成请求积压",
         "change-incident": "变更引发事件偏多",
-        "request-csat": "请求满意度下滑"
+        "request-csat": "请求满意度下滑",
+        "incident-sla": "事件 SLA 出现违约",
+        "problem-open": "未关闭问题偏多",
+        "request-sla-critical": "服务请求 SLA 达成率严重偏低",
+        "request-sla-breach": "服务请求 SLA 达成率不足"
       },
       "riskImpact": {
         "change-failure": "发布稳定性下降，需优先排查高风险变更。",
         "problem-closure": "根因与永久修复积压，风险会持续放大。",
         "request-open": "履约体验承压，用户等待时间会拉长。",
         "change-incident": "上线质量与变更验证存在薄弱点。",
-        "request-csat": "服务体验有波动，建议复盘高频诉求。"
+        "request-csat": "服务体验有波动，建议复盘高频诉求。",
+        "incident-sla": "核心事件响应存在超时情况。",
+        "problem-open": "问题池持续扩大，会拖累稳定性治理。",
+        "request-sla-critical": "履约流程存在系统性问题，需立即排查瓶颈环节。",
+        "request-sla-breach": "部分请求类型履约超时，建议关注高频积压目录。"
       },
       "tableTitle": "关键关注项",
       "tableColumns": {

@@ -1,86 +1,50 @@
 #!/usr/bin/env python3
 """
-Customer Quality Report Generator - Comprehensive Version.
-
-Integrates all 4 ITIL processes: Incidents, Changes, Requests, Problems.
-Outputs a 10-sheet XLSX workbook with native Excel charts and AI insights.
+BI Dashboard Excel Export — Exports all 8 BI tabs to a single XLSX workbook.
 
 Usage:
-    python generate_report.py                    # Generate both EN and ZH
-    python generate_report.py --language en      # Generate EN only
-    python generate_report.py --language zh      # Generate ZH only
-    python generate_report.py --no-ai            # Skip AI insight generation
+    python generate_report.py                    # Generate CN + EN
+    python generate_report.py --language zh      # Chinese only
+    python generate_report.py --language en      # English only
+    python generate_report.py --bi-url http://localhost:8093
 """
 
 import argparse
+import concurrent.futures
+import copy
+import json
+import logging
 import sys
 from pathlib import Path
+from typing import Optional, Tuple
 
-# Add script directory to path
+import requests
+
 SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-# Load environment variables
-from dotenv import load_dotenv
-env_path = SCRIPT_DIR.parent / ".env"
-if env_path.exists():
-    load_dotenv(env_path)
+from bi_client import BiApiClient, BiDataAdapter
+from xlsx_builder import BiXlsxBuilder
 
-from config import INCIDENTS_FILE, CHANGES_FILE, REQUESTS_FILE, PROBLEMS_FILE
-from analyzer import ComprehensiveAnalyzer
-from insight_generator import InsightGenerator
-from xlsx_builder import XlsxBuilder
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
-def print_banner(languages: list, chart_engine: str = "native") -> None:
-    """Print startup banner."""
+def print_banner(languages: list, bi_url: str) -> None:
     print("\n" + "=" * 70)
-    print("  📊 Customer Quality Report Generator (Comprehensive)")
-    print("     客户质量报告生成器（综合版）")
+    print("  📊 BI Dashboard Excel Export")
+    print("     BI 仪表板 Excel 导出")
     print("=" * 70)
     lang_str = " & ".join([("Chinese" if l == "zh" else "English") for l in languages])
     print(f"  🌐 Languages: {lang_str}")
-    print(f"  📊 Chart Engine: {chart_engine}")
-
-
-def check_data_files() -> dict:
-    """Check which data files exist."""
-    files = {
-        "incidents": INCIDENTS_FILE,
-        "changes": CHANGES_FILE,
-        "requests": REQUESTS_FILE,
-        "problems": PROBLEMS_FILE
-    }
-
-    status = {}
-    for name, path in files.items():
-        status[name] = {"path": path, "exists": path.exists()}
-
-    return status
-
-
-def generate_xlsx(analyzer, result, insights: dict, language: str,
-                  chart_engine: str = "native") -> Path:
-    """Generate XLSX report for a given language. Returns output path."""
-    xlsx_builder = XlsxBuilder(
-        result=result,
-        incidents_df=analyzer.incidents_df,
-        changes_df=analyzer.changes_df,
-        requests_df=analyzer.requests_df,
-        problems_df=analyzer.problems_df,
-        sla_map=analyzer.sla_map,
-        insights=insights,
-        language=language,
-        chart_engine=chart_engine,
-    )
-    return xlsx_builder.save()
+    print(f"  🔗 BI URL: {bi_url}")
 
 
 def main():
-    """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Generate Comprehensive Customer Quality Report (XLSX)"
-    )
+    parser = argparse.ArgumentParser(description="BI Dashboard Excel Export")
     parser.add_argument(
         "--language", "-l",
         choices=["en", "zh", "both"],
@@ -88,146 +52,108 @@ def main():
         help="Output language (en=English, zh=Chinese, both=Both)"
     )
     parser.add_argument(
-        "--no-ai",
-        action="store_true",
-        help="Skip AI insight generation"
+        "--bi-url",
+        default="http://localhost:8093",
+        help="BI backend base URL"
     )
     parser.add_argument(
-        "--chart-engine",
-        choices=["native", "matplotlib"],
-        default="native",
-        help="Chart engine: native (Excel built-in) or matplotlib (PNG images)"
+        "--output-dir",
+        default="output",
+        help="Output directory for generated files"
+    )
+    parser.add_argument(
+        "--start-date",
+        default=None,
+        help="Start date for reporting period (e.g. 2024-04-01)"
+    )
+    parser.add_argument(
+        "--end-date",
+        default=None,
+        help="End date for reporting period (e.g. 2025-04-01)"
     )
 
     args = parser.parse_args()
 
-    # Determine languages to generate
     if args.language == "both":
-        languages = ["en", "zh"]
+        languages = ["zh", "en"]
     else:
         languages = [args.language]
 
-    print_banner(languages, args.chart_engine)
+    print_banner(languages, args.bi_url)
 
-    # Check data files
-    print("\n  📁 Data Files:")
-    file_status = check_data_files()
-
-    for name, info in file_status.items():
-        status = "✓" if info["exists"] else "✗"
-        print(f"    {status} {name.capitalize()}: {info['path'].name}")
-
-    # Check required file
-    if not file_status["incidents"]["exists"]:
-        print(f"\n  ❌ Error: Required file not found: {INCIDENTS_FILE}")
+    # Step 1: Fetch data from BI backend
+    print("\n  ▶ Fetching data from BI backend...")
+    if args.start_date or args.end_date:
+        print(f"    Period: {args.start_date or '…'} ~ {args.end_date or '…'}")
+    try:
+        client = BiApiClient(base_url=args.bi_url)
+        overview = client.get_overview(
+            start_date=args.start_date,
+            end_date=args.end_date,
+        )
+        adapter = BiDataAdapter(overview)
+        all_tabs_raw = adapter.get_all_tabs()
+        print(f"    ✓ Fetched {len(all_tabs_raw)} tabs")
+    except (requests.RequestException, json.JSONDecodeError, OSError) as e:
+        print(f"    ❌ Failed to fetch data: {e}")
+        logger.exception("Failed to fetch BI data")
         sys.exit(1)
 
-    print()
+    # Step 2: Generate reports for each language
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        # Step 1: Analyze all data (language-independent)
-        print("  ▶ Analyzing data across all processes...")
-        analyzer = ComprehensiveAnalyzer(
-            incidents_file=INCIDENTS_FILE,
-            changes_file=CHANGES_FILE if file_status["changes"]["exists"] else None,
-            requests_file=REQUESTS_FILE if file_status["requests"]["exists"] else None,
-            problems_file=PROBLEMS_FILE if file_status["problems"]["exists"] else None
-        )
-        result = analyzer.analyze()
+    # Build period label for footer
+    period_label = ""
+    if args.start_date or args.end_date:
+        start = args.start_date or "…"
+        end = args.end_date or "…"
+        period_label = f"{start} ~ {end}"
 
-        print(f"    ✓ Analysis complete")
-        print(f"    ✓ Date range: {result.start_date} to {result.end_date}")
-        print(f"    ✓ Data span: {result.data_span_days} days")
-        print(f"    ✓ Health Score: {result.health_score:.0f}/100 ({result.health_grade})")
-        print()
+    all_paths = []
+    results = []
 
-        # Process summary
-        print("    📊 Process Summary:")
-        print(f"       • Incidents: {result.total_incidents}")
-        print(f"       • Changes: {result.total_changes}")
-        print(f"       • Requests: {result.total_requests}")
-        print(f"       • Problems: {result.total_problems}")
-        print()
+    def _build_language(language: str) -> Tuple[str, Optional[Path], Optional[Exception]]:
+        """Build a single-language workbook. Thread-safe for independent languages."""
+        try:
+            # Deep-copy the shared snapshot so each language adapter can mutate labels safely.
+            localized_adapter = BiDataAdapter(copy.deepcopy(overview), language=language)
+            all_tabs = localized_adapter.get_all_tabs()
+            builder = BiXlsxBuilder(snapshot_data=all_tabs, language=language, period_label=period_label)
+            filepath = builder.save(output_dir=output_dir)
+            return language, filepath, None
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            return language, None, exc
 
-        # Step 2: Generate reports for each language
-        all_output_paths = {}
-
-        for language in languages:
-            lang_label = "ZH" if language == "zh" else "EN"
-
-            # AI Insights (language-dependent)
-            insights = {}
-            if not args.no_ai:
-                print(f"\n  [{lang_label}] Generating AI insights...")
-                try:
-                    insight_gen = InsightGenerator(language)
-                    insights = insight_gen.generate_all_insights(result)
-                    print(f"    ✓ Generated {len(insights)} insights")
-                    insight_gen.print_cache_stats()
-                except Exception as e:
-                    print(f"    ⚠ AI insights skipped: {e}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(languages), 4)) as executor:
+        futures = {executor.submit(_build_language, lang): lang for lang in languages}
+        for future in concurrent.futures.as_completed(futures):
+            lang, path, exc = future.result()
+            lang_label = "ZH" if lang == "zh" else "EN"
+            if exc:
+                print(f"\n  [{lang_label}] ❌ Failed to build report: {exc}")
+                logger.exception("Failed to build %s report", lang_label)
+                results.append((lang, None, exc))
             else:
-                if language == languages[0]:
-                    print("\n  ▶ Skipping AI insights (--no-ai)")
+                print(f"\n  [{lang_label}] ✓ Saved: {path.name}")
+                all_paths.append(path)
+                results.append((lang, path, None))
 
-            # Generate XLSX
-            print(f"\n  [{lang_label}] Building XLSX report...")
-            xlsx_path = generate_xlsx(analyzer, result, insights, language,
-                                      args.chart_engine)
-            all_output_paths[f"xlsx_{lang_label}"] = xlsx_path
-            print(f"    ✓ XLSX: {Path(xlsx_path).name}")
+    # Preserve deterministic order (zh before en) for the summary
+    results.sort(key=lambda r: languages.index(r[0]))
+    all_paths = [r[1] for r in results if r[1] is not None]
 
-        # Summary
-        print()
-        print("=" * 70)
+    # Summary
+    print("\n" + "=" * 70)
+    if all_paths:
         print("  ✅ All reports generated successfully!")
         print("=" * 70)
-        print()
-        print("  📄 Output files:")
-        for key, path in sorted(all_output_paths.items()):
+        print("\n  📄 Output files:")
+        for path in all_paths:
             print(f"    • {path}")
-
-        # Key Findings Summary
-        print()
-        print("  📈 Key Findings:")
-        print(f"    • Health Score: {result.health_score:.0f}/100 ({result.health_grade})")
-
-        if result.incident_summary and result.incident_summary.kpis:
-            sla = result.incident_summary.kpis.get("sla_rate")
-            if sla:
-                print(f"    • Incident SLA: {sla.current_value:.1%}")
-
-        if result.change_summary and result.change_summary.kpis:
-            success = result.change_summary.kpis.get("change_success_rate")
-            if success:
-                print(f"    • Change Success: {success.current_value:.1%}")
-
-        if result.request_summary and result.request_summary.kpis:
-            csat = result.request_summary.kpis.get("request_csat")
-            if csat:
-                print(f"    • Request CSAT: {csat.current_value:.2f}/5")
-
-        if result.problem_summary and result.problem_summary.kpis:
-            closure = result.problem_summary.kpis.get("problem_closure_rate")
-            if closure:
-                print(f"    • Problem Closure: {closure.current_value:.1%}")
-
-        print(f"    • Top Risks: {len(result.top_risks)}")
-        print(f"    • Recommended Actions: {len(result.actions)}")
-
-        if result.can_compare_wow:
-            print(f"    • Week-over-Week: Available")
-        if result.can_compare_mom:
-            print(f"    • Month-over-Month: Available")
-
-        print()
-        print("=" * 70)
-
-    except Exception as e:
-        print(f"\n  ❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    else:
+        print("  ❌ No reports were generated.")
+    print("=" * 70)
 
 
 if __name__ == "__main__":

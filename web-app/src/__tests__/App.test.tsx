@@ -6,12 +6,16 @@ import { UserProvider } from '../app/platform/providers/UserContext'
 import { GoosedProvider } from '../app/platform/providers/GoosedContext'
 import { ToastProvider } from '../app/platform/providers/ToastContext'
 
+import i18n from '../i18n'
+
 const STORAGE_KEY = 'opsfactory:userId'
 
 describe('App', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         // Set a userId so ProtectedRoute allows access
         localStorage.setItem(STORAGE_KEY, 'test-user')
+        // Force English so sidebar labels match assertions regardless of default locale
+        await i18n.changeLanguage('en')
     })
 
     afterEach(() => {

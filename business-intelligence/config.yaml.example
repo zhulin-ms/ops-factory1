@@ -18,6 +18,9 @@ business-intelligence:
     base-dir: "./data"
     # Cache aggregated snapshot data in memory between requests.
     cache-enabled: true
+    # Optional override for the BI service URL used by the enhanced export script.
+    # Leave empty to fall back to http://localhost:<server.port>.
+    export-bi-url: ""
   logging:
     access-log-enabled: true
 

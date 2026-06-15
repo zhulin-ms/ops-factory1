@@ -103,6 +103,9 @@
     "serviceUnavailable": "Business intelligence service is unavailable or misconfigured ({{status}} {{statusText}}).",
     "invalidJsonResponse": "The business intelligence endpoint returned HTML instead of JSON. Check businessIntelligenceServiceUrl or dev proxy settings.",
     "download": "Download Excel",
+    "exporting": "Exporting...",
+    "exportSuccess": "Excel report exported successfully.",
+    "exportFailed": "Export failed: {{error}}",
     "lastUpdated": "Last updated",
     "reportingPeriod": "Reporting period",
     "reportingPeriods": {
@@ -115,6 +118,7 @@
       "custom": "Custom"
     },
     "dateRangeSeparator": "to",
+    "invalidDateRange": "The start date must be before or equal to the end date.",
     "year": "Year",
     "month": "Month",
     "day": "Day",
@@ -175,6 +179,7 @@
       "warning": "Warning",
       "attention": "Attention",
       "priority": "Priority",
+      "riskTitle": "Risk Item",
       "impact": "Impact",
       "process": "Process",
       "currentValue": "Current Value",
@@ -223,14 +228,22 @@
         "problem-closure": "Low problem closure rate",
         "request-open": "Open request backlog",
         "change-incident": "Changes causing too many incidents",
-        "request-csat": "Declining request satisfaction"
+        "request-csat": "Declining request satisfaction",
+        "incident-sla": "Incident SLA breaches detected",
+        "problem-open": "Too many open problems",
+        "request-sla-critical": "Request SLA compliance critically low",
+        "request-sla-breach": "Request SLA compliance insufficient"
       },
       "riskImpact": {
         "change-failure": "Release stability has declined. Prioritize reviewing high-risk changes.",
         "problem-closure": "Root cause and permanent fix backlog is growing, risk will compound.",
         "request-open": "Fulfillment experience is under pressure, wait times will increase.",
         "change-incident": "Release quality and change validation have weak points.",
-        "request-csat": "Service experience is fluctuating, consider reviewing frequent requests."
+        "request-csat": "Service experience is fluctuating, consider reviewing frequent requests.",
+        "incident-sla": "Core incident response has timed out.",
+        "problem-open": "Problem pool is growing, which will drag down stability governance.",
+        "request-sla-critical": "Systemic issues in fulfillment process. Investigate bottlenecks immediately.",
+        "request-sla-breach": "Some request categories are timing out. Monitor high-frequency backlog catalogs."
       },
       "tableTitle": "Key Concerns",
       "tableColumns": {

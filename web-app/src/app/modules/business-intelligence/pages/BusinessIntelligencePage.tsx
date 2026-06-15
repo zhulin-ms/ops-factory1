@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { RefreshCw } from '../../../platform/ui/icons/AppIcons'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { RefreshCw, Download } from '../../../platform/ui/icons/AppIcons'
 import { useTranslation } from 'react-i18next'
 import { runtime } from '../../../../config/runtime'
+import { downloadBlobResponse } from '../../../../utils/download'
+import { trackedFetch } from '../../../platform/logging/requestClient'
 import { useToast } from '../../../platform/providers/ToastContext'
 import FilterInlineGroup from '../../../platform/ui/filters/FilterInlineGroup'
 import AnalyticsTableCard from '../../../platform/ui/primitives/AnalyticsTableCard'
@@ -1151,13 +1153,17 @@ function ExecutiveSummaryPanel({
         const val = _t(`${ns}.processes.${id}`)
         return val.includes('.') ? id : val
     }
-    const localizeRiskTitle = (id: string) => {
-        const val = _t(`${ns}.risks.${id}`)
-        return val.includes('.') ? id : val
+    const localizeRiskTitle = (id: string, fallback: string) => {
+        const key = `${ns}.risks.${id}`
+        const val = _t(key)
+        // i18next returns the lookup key when translation is missing
+        return val === key ? fallback : val
     }
-    const localizeRiskImpact = (id: string) => {
-        const val = _t(`${ns}.riskImpact.${id}`)
-        return val.includes('.') ? '' : val
+    const localizeRiskImpact = (id: string, fallback: string) => {
+        const key = `${ns}.riskImpact.${id}`
+        const val = _t(key)
+        // i18next returns the lookup key when translation is missing
+        return val === key ? fallback : val
     }
     const localizePriority = (priority: string) => {
         const p = priority.toLowerCase()
@@ -1319,7 +1325,7 @@ function ExecutiveSummaryPanel({
 
     const riskCols = [
         { key: 'priority', label: _t('businessIntelligence.executiveSummary.priority'), className: 'executive-risk-col-priority' },
-        { key: 'title', label: null, className: '' },
+        { key: 'title', label: _t('businessIntelligence.executiveSummary.riskTitle'), className: '' },
         { key: 'impact', label: _t('businessIntelligence.executiveSummary.impact'), className: '' },
         { key: 'process', label: _t('businessIntelligence.executiveSummary.process'), className: 'executive-risk-col-process' },
         { key: 'value', label: _t('businessIntelligence.executiveSummary.currentValue'), className: 'executive-risk-col-value' },
@@ -1431,8 +1437,8 @@ function ExecutiveSummaryPanel({
                                                     {localizePriority(risk.priority)}
                                                 </span>
                                             </td>
-                                            <td style={{ fontWeight: 600 }}>{localizeRiskTitle(risk.id)}</td>
-                                            <td>{localizeRiskImpact(risk.id)}</td>
+                                            <td style={{ fontWeight: 600 }}>{localizeRiskTitle(risk.id, risk.title)}</td>
+                                            <td>{localizeRiskImpact(risk.id, risk.impact)}</td>
                                             <td className="executive-risk-col-process">{localizeProcessLabel(risk.process)}</td>
                                             <td className="executive-risk-col-value" style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                                                 {risk.value}
@@ -3328,14 +3334,21 @@ function GenericTabPanel({
 }
 
 export default function BusinessIntelligence() {
-    const { t } = useTranslation()
+    const { t, i18n } = useTranslation()
     const { showToast } = useToast()
     const [overview, setOverview] = useState<OverviewResponse | null>(null)
     const [activeTabId, setActiveTabId] = useState<string>('executive-summary')
     const [loading, setLoading] = useState(true)
     const [refreshing, setRefreshing] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [exporting, setExporting] = useState(false)
     const [reportingPeriod, setReportingPeriod] = useState<ReportingPeriod>(getDefaultReportingPeriod())
+    const invalidRangeNotified = useRef(false)
+
+    const isInvalidRange = reportingPeriod.preset === 'custom'
+        && !!reportingPeriod.startDate
+        && !!reportingPeriod.endDate
+        && reportingPeriod.startDate > reportingPeriod.endDate
 
     const loadOverview = useCallback(async (options?: { forceRefresh?: boolean; startDate?: string; endDate?: string }) => {
         const forceRefresh = options?.forceRefresh === true
@@ -3397,8 +3410,56 @@ export default function BusinessIntelligence() {
         }
     }, [showToast, t])
 
+    const handleExport = useCallback(async () => {
+        if (exporting) return
+        setExporting(true)
+        try {
+            const language = i18n.language?.startsWith('zh') ? 'zh' : 'en'
+            const params = new URLSearchParams({ language })
+            if (reportingPeriod.startDate) params.set('startDate', reportingPeriod.startDate)
+            if (reportingPeriod.endDate) params.set('endDate', reportingPeriod.endDate)
+            const url = `${runtime.BUSINESS_INTELLIGENCE_SERVICE_URL}/export-enhanced.xlsx?${params.toString()}`
+            const response = await trackedFetch(url, {
+                method: 'GET',
+                category: 'request',
+                name: 'request.send',
+                credentials: 'include',
+            })
+            if (!response.ok) {
+                const errorText = await response.text().catch(() => '')
+                let errorMessage = `${response.status} ${response.statusText}`
+                if (errorText) {
+                    try {
+                        const errorPayload = JSON.parse(errorText) as { error?: string; message?: string }
+                        errorMessage = errorPayload.error || errorPayload.message || errorText
+                    } catch {
+                        errorMessage = errorText
+                    }
+                }
+                throw new Error(errorMessage)
+            }
+            const langSuffix = language === 'zh' ? 'CN' : 'EN'
+            await downloadBlobResponse(response, `BI_Dashboard_Export_${langSuffix}.xlsx`)
+            showToast('success', t('businessIntelligence.exportSuccess'))
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            showToast('error', t('businessIntelligence.exportFailed', { error: message }))
+        } finally {
+            setExporting(false)
+        }
+    }, [exporting, i18n.language, reportingPeriod.startDate, reportingPeriod.endDate, showToast, t])
+
     // Load data when reporting period changes (also covers initial load)
     useEffect(() => {
+        if (isInvalidRange) {
+            if (!invalidRangeNotified.current) {
+                showToast('error', t('businessIntelligence.invalidDateRange'))
+                invalidRangeNotified.current = true
+            }
+            return
+        }
+        invalidRangeNotified.current = false
+
         if (reportingPeriod.preset === 'custom') {
             if (reportingPeriod.startDate && reportingPeriod.endDate) {
                 void loadOverview({
@@ -3416,12 +3477,15 @@ export default function BusinessIntelligence() {
         } else {
             void loadOverview()
         }
-    }, [reportingPeriod.preset, reportingPeriod.startDate, reportingPeriod.endDate, loadOverview])
+    }, [reportingPeriod.preset, reportingPeriod.startDate, reportingPeriod.endDate, loadOverview, isInvalidRange, showToast, t])
 
     const activeTab = useMemo(() => {
         if (!overview) return null
         return overview.tabContents[activeTabId] || overview.tabContents[overview.tabs[0]?.id || ''] || null
     }, [activeTabId, overview])
+
+    const isExportDisabled = exporting || loading || isInvalidRange ||
+        (reportingPeriod.preset === 'custom' && (!reportingPeriod.startDate || !reportingPeriod.endDate))
 
     return (
         <div className="page-container sidebar-top-page page-shell-wide business-intelligence-page">
@@ -3449,6 +3513,15 @@ export default function BusinessIntelligence() {
                         title={refreshing ? t('businessIntelligence.refreshing') : t('businessIntelligence.refresh')}
                         leadingIcon={<RefreshCw size={15} className={refreshing ? 'business-intelligence-refresh-icon spinning' : 'business-intelligence-refresh-icon'} />}
                     />
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void handleExport()}
+                        disabled={isExportDisabled}
+                        leadingIcon={<Download size={15} />}
+                    >
+                        {exporting ? t('businessIntelligence.exporting') : t('businessIntelligence.download')}
+                    </Button>
                 </div>
             </div>
 

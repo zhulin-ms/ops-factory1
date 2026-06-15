@@ -11,6 +11,7 @@ import platform
 import math
 from typing import Dict, Tuple, Optional
 
+import matplotlib.font_manager as fm
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # =============================================================================
@@ -23,8 +24,6 @@ def _detect_cjk_font() -> str:
     Uses platform detection with fallback chain.  Fonts are checked against
     matplotlib's font_manager so we only return names matplotlib can resolve.
     """
-    import matplotlib.font_manager as fm
-
     system = platform.system()
     if system == "Darwin":
         candidates = ["Hiragino Sans GB", "Heiti TC", "Arial Unicode MS", "PingFang SC"]
@@ -110,10 +109,10 @@ CHART_COLORS_HEX = [
 ]
 
 # Native chart sizing (in cm for openpyxl)
-CHART_WIDTH_CM  = 18        # standard chart width
-CHART_HEIGHT_CM = 12        # standard chart height
-CHART_SMALL_W   = 9         # small chart (gauge, sparkline)
-CHART_SMALL_H   = 8         # small chart height
+CHART_WIDTH_CM  = 22        # standard chart width
+CHART_HEIGHT_CM = 14        # standard chart height
+CHART_SMALL_W   = 12        # small chart (gauge, sparkline)
+CHART_SMALL_H   = 10        # small chart height
 
 # Row computation for chart placement
 DEFAULT_ROW_HEIGHT_PT = 15.0  # Excel default row height in points

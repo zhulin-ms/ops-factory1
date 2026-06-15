@@ -93,15 +93,6 @@ public class BusinessIntelligenceMetricsService {
 
     // ── Constants ──────────────────────────────────────────────────────────
 
-    private static final List<DateTimeFormatter> DATE_TIME_FORMATTERS = List.of(
-        DateTimeFormatter.ISO_DATE_TIME,
-        DateTimeFormatter.ofPattern("M/d/yyyy H:mm"),
-        DateTimeFormatter.ofPattern("M/d/yyyy H:mm:ss"),
-        DateTimeFormatter.ofPattern("M/d/yyyy h:mm:ss a", Locale.ENGLISH),
-        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
-        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
-    );
-
     private static final List<String> PRIORITY_ORDER = List.of("P1", "P2", "P3", "P4");
 
     private static final int MAX_ROWS = 500;
@@ -562,7 +553,7 @@ public class BusinessIntelligenceMetricsService {
 
         long p1p2Within48h = changes.stream()
             .filter(ch -> !clean(ch.get(BiColumns.INCIDENT_CAUSED)).isEmpty())
-            .flatMap(ch -> findIncidentsWithin48h(incidents, parseDate(ch.get(BiColumns.ACTUAL_END))).stream())
+            .flatMap(ch -> findIncidentsWithin48h(incidents, BiDateUtils.parseDate(ch.get(BiColumns.ACTUAL_END))).stream())
             .map(inc -> inc.get(BiColumns.ORDER_NUMBER))
             .distinct()
             .count();
@@ -575,7 +566,7 @@ public class BusinessIntelligenceMetricsService {
         double avgAging = problems.stream()
             .filter(row -> !matchesAny(clean(row.get(BiColumns.STATUS)), List.of("Resolved", "Closed")))
             .mapToLong(row -> {
-                LocalDateTime logged = parseDate(row.get(BiColumns.LOGGED_DATE));
+                LocalDateTime logged = BiDateUtils.parseDate(row.get(BiColumns.LOGGED_DATE));
                 return logged != null ? java.time.Duration.between(logged, LocalDateTime.now()).toDays() : 0;
             }).average().orElse(0);
         double agingWeight = Math.min(avgAging / 90.0, 1.0) * 30;
@@ -586,12 +577,12 @@ public class BusinessIntelligenceMetricsService {
         Map<String, Long> causedByMonth = new LinkedHashMap<>();
 
         for (Map<String, String> ch : changes) {
-            LocalDateTime date = parseDate(ch.get(BiColumns.REQUESTED_DATE));
-            if (date == null) date = parseDate(ch.get(BiColumns.ACTUAL_END));
+            LocalDateTime date = BiDateUtils.parseDate(ch.get(BiColumns.REQUESTED_DATE));
+            if (date == null) date = BiDateUtils.parseDate(ch.get(BiColumns.ACTUAL_END));
             if (date == null) continue;
             String month = date.format(DateTimeFormatter.ofPattern("yyyy-MM"));
             changeByMonth.merge(month, 1L, Long::sum);
-            LocalDateTime actualEnd = parseDate(ch.get(BiColumns.ACTUAL_END));
+            LocalDateTime actualEnd = BiDateUtils.parseDate(ch.get(BiColumns.ACTUAL_END));
             long p1p2 = findIncidentsWithin48h(incidents, actualEnd).size();
             causedByMonth.merge(month, p1p2, Long::sum);
         }
@@ -847,7 +838,7 @@ public class BusinessIntelligenceMetricsService {
     private void traceFromIncident(Map<String, String> src, String srcId, BiRawData raw, List<RelatedTicket> related) {
         String ci = src.getOrDefault(BiColumns.CI_AFFECTED, "").trim().toLowerCase(Locale.ROOT);
         String category = src.getOrDefault(BiColumns.CATEGORY, "").trim().toLowerCase(Locale.ROOT);
-        LocalDateTime beginDate = parseDate(src.get(BiColumns.BEGIN_DATE));
+        LocalDateTime beginDate = BiDateUtils.parseDate(src.get(BiColumns.BEGIN_DATE));
 
         for (var c : raw.changes()) {
             String changeCi = c.getOrDefault(BiColumns.CI_AFFECTED, "").trim().toLowerCase(Locale.ROOT);
@@ -855,7 +846,8 @@ public class BusinessIntelligenceMetricsService {
                 related.add(new RelatedTicket(c.get(BiColumns.CHANGE_NUMBER), "changes", "same_ci", "high"));
             }
             if (beginDate != null) {
-                LocalDateTime actualEnd = parseDate(c.get(BiColumns.ACTUAL_END));                if (actualEnd != null && Math.abs(ChronoUnit.SECONDS.between(beginDate, actualEnd)) < 48 * 3600) {
+                LocalDateTime actualEnd = BiDateUtils.parseDate(c.get(BiColumns.ACTUAL_END));
+                if (actualEnd != null && Math.abs(ChronoUnit.SECONDS.between(beginDate, actualEnd)) < 48 * 3600) {
                     related.add(new RelatedTicket(c.get(BiColumns.CHANGE_NUMBER), "changes", "time_window_48h", "medium"));
                 }
             }
@@ -875,7 +867,7 @@ public class BusinessIntelligenceMetricsService {
 
     private void traceFromChange(Map<String, String> src, String srcId, BiRawData raw, List<RelatedTicket> related) {
         String ci = src.getOrDefault(BiColumns.CI_AFFECTED, "").trim().toLowerCase(Locale.ROOT);
-        LocalDateTime actualEnd = parseDate(src.get(BiColumns.ACTUAL_END));
+        LocalDateTime actualEnd = BiDateUtils.parseDate(src.get(BiColumns.ACTUAL_END));
         String incidentIdsValue = src.getOrDefault(BiColumns.INCIDENT_CAUSED, "").trim();
         boolean caused = !incidentIdsValue.isEmpty();
 
@@ -885,7 +877,7 @@ public class BusinessIntelligenceMetricsService {
                 related.add(new RelatedTicket(incOrderNum, "incidents", "referenced_in_change", "high"));
             }
             if (caused && actualEnd != null) {
-                LocalDateTime incBegin = parseDate(inc.get(BiColumns.BEGIN_DATE));
+                LocalDateTime incBegin = BiDateUtils.parseDate(inc.get(BiColumns.BEGIN_DATE));
                 if (incBegin != null) {
                     long diff = ChronoUnit.SECONDS.between(actualEnd, incBegin);
                     if (diff > 0 && diff < 48 * 3600) {
@@ -986,12 +978,12 @@ public class BusinessIntelligenceMetricsService {
                 default -> null;
             };
         }
-        if (startDate != null) rangeStart = parseDate(startDate);
-        if (endDate != null) rangeEnd = parseDate(endDate);
+        if (startDate != null) rangeStart = BiDateUtils.parseDate(startDate);
+        if (endDate != null) rangeEnd = BiDateUtils.parseDate(endDate);
 
         Map<String, List<Map<String, String>>> buckets = new LinkedHashMap<>();
         for (var row : rows) {
-            LocalDateTime d = parseDate(row.get(dateField));
+            LocalDateTime d = BiDateUtils.parseDate(row.get(dateField));
             if (d == null) continue;
             if (rangeStart != null && d.isBefore(rangeStart)) continue;
             if (rangeEnd != null && d.isAfter(rangeEnd)) continue;
@@ -1156,8 +1148,28 @@ public class BusinessIntelligenceMetricsService {
             case "not_equals" -> !cell.equals(str(value).toLowerCase(Locale.ROOT));
             case "contains" -> cell.contains(str(value).toLowerCase(Locale.ROOT));
             case "starts_with" -> cell.startsWith(str(value).toLowerCase(Locale.ROOT));
-            case "greater_than" -> parseDouble(cell) > parseDouble(str(value));
-            case "less_than" -> parseDouble(cell) < parseDouble(str(value));
+            case "greater_than" -> {
+                if (isNumeric(cell) && isNumeric(str(value))) {
+                    yield parseDouble(cell) > parseDouble(str(value));
+                }
+                LocalDateTime cellDate = BiDateUtils.parseDate(cell);
+                LocalDateTime valueDate = BiDateUtils.parseDate(str(value));
+                if (cellDate != null && valueDate != null) {
+                    yield cellDate.isAfter(valueDate);
+                }
+                yield cell.compareTo(str(value)) > 0;
+            }
+            case "less_than" -> {
+                if (isNumeric(cell) && isNumeric(str(value))) {
+                    yield parseDouble(cell) < parseDouble(str(value));
+                }
+                LocalDateTime cellDate = BiDateUtils.parseDate(cell);
+                LocalDateTime valueDate = BiDateUtils.parseDate(str(value));
+                if (cellDate != null && valueDate != null) {
+                    yield cellDate.isBefore(valueDate);
+                }
+                yield cell.compareTo(str(value)) < 0;
+            }
             case "in" -> {
                 List<String> vals = value instanceof List<?> list
                     ? list.stream().map(Object::toString).map(String::trim).map(s -> s.toLowerCase(Locale.ROOT)).toList()
@@ -1171,12 +1183,13 @@ public class BusinessIntelligenceMetricsService {
     private List<Map<String, String>> sortRows(List<Map<String, String>> rows, String sortBy, String sortOrder) {
         if (sortBy == null || sortBy.isBlank()) return rows;
         boolean desc = !"asc".equalsIgnoreCase(sortOrder);
-        return rows.stream()
-            .sorted(Comparator.comparingDouble(r -> {
-                double v = parseDouble(r.getOrDefault(sortBy, ""));
-                return desc ? -v : v;
-            }))
-            .toList();
+        Comparator<String> cmp = (a, b) -> {
+            boolean aNum = isNumeric(a), bNum = isNumeric(b);
+            if (aNum && bNum) return Double.compare(parseDouble(a), parseDouble(b));
+            return a.compareTo(b);
+        };
+        Comparator<Map<String, String>> rowCmp = Comparator.comparing(r -> r.getOrDefault(sortBy, ""), cmp);
+        return rows.stream().sorted(desc ? rowCmp.reversed() : rowCmp).toList();
     }
 
     private List<Map<String, String>> selectFields(List<Map<String, String>> rows, List<String> fields) {
@@ -1236,34 +1249,20 @@ public class BusinessIntelligenceMetricsService {
         }
     }
 
-    private LocalDateTime parseDate(String value) {
-        String normalized = clean(value);
-        if (normalized.isBlank()) {
-            return null;
-        }
-        for (DateTimeFormatter formatter : DATE_TIME_FORMATTERS) {
-            try {
-                return LocalDateTime.parse(normalized, formatter);
-            } catch (DateTimeParseException ignored) {
-            }
-        }
+    private boolean isNumeric(String value) {
+        String c = clean(value);
+        if (c.isEmpty()) return false;
         try {
-            return LocalDate.parse(normalized).atStartOfDay();
-        } catch (DateTimeParseException ignored) {
+            Double.parseDouble(c);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
         }
-        try {
-            double excelDate = Double.parseDouble(normalized);
-            return LocalDateTime.ofInstant(
-                java.time.Instant.ofEpochMilli(Math.round((excelDate - 25569) * 86400000L)),
-                ZoneOffset.UTC);
-        } catch (NumberFormatException ignored) {
-        }
-        return null;
     }
 
     private double parseDurationMinutes(String startStr, String endStr) {
-        LocalDateTime start = parseDate(startStr);
-        LocalDateTime end = parseDate(endStr);
+        LocalDateTime start = BiDateUtils.parseDate(startStr);
+        LocalDateTime end = BiDateUtils.parseDate(endStr);
         if (start == null || end == null || !end.isAfter(start)) return 0;
         return java.time.Duration.between(start, end).toMinutes();
     }
@@ -1443,7 +1442,7 @@ public class BusinessIntelligenceMetricsService {
         if (dateStr == null || dateStr.isBlank()) {
             return true;
         }
-        LocalDateTime dateTime = parseDate(dateStr);
+        LocalDateTime dateTime = BiDateUtils.parseDate(dateStr);
         if (dateTime == null) {
             return true;
         }
@@ -1479,7 +1478,7 @@ public class BusinessIntelligenceMetricsService {
     private Map<YearMonth, List<Map<String, String>>> groupByMonth(List<Map<String, String>> rows, String key) {
         return rows.stream()
             .map(row -> {
-                LocalDateTime parsedDate = parseDate(row.get(key));
+                LocalDateTime parsedDate = BiDateUtils.parseDate(row.get(key));
                 if (parsedDate == null) {
                     return null;
                 }
@@ -1545,7 +1544,7 @@ public class BusinessIntelligenceMetricsService {
                     priority,
                     row.get(BiColumns.CATEGORY),
                     row.get(BiColumns.RESOLVER),
-                    parseDate(row.get(BiColumns.BEGIN_DATE)),
+                    BiDateUtils.parseDate(row.get(BiColumns.BEGIN_DATE)),
                     responseMinutes,
                     resolutionMinutes,
                     responseMinutes <= responseTarget,
@@ -1619,7 +1618,7 @@ public class BusinessIntelligenceMetricsService {
                     row.get(BiColumns.REQUEST_TYPE),
                     row.get(BiColumns.REQUESTER_DEPT),
                     row.get(BiColumns.ASSIGNED_TO),
-                    parseDate(row.get(BiColumns.REQUESTED_DATE)),
+                    BiDateUtils.parseDate(row.get(BiColumns.REQUESTED_DATE)),
                     responseMinutes, resolutionMinutes,
                     responseMinutes <= respTarget,
                     resolutionMinutes <= resoTarget,
@@ -1793,7 +1792,7 @@ public class BusinessIntelligenceMetricsService {
         if (changeEnd == null) return List.of();
         return incidents.stream()
             .filter(inc -> {
-                LocalDateTime incBegin = parseDate(inc.get(BiColumns.BEGIN_DATE));
+                LocalDateTime incBegin = BiDateUtils.parseDate(inc.get(BiColumns.BEGIN_DATE));
                 if (incBegin == null) return false;
                 String priority = clean(inc.get(BiColumns.PRIORITY));
                 if (!"P1".equalsIgnoreCase(priority) && !"P2".equalsIgnoreCase(priority)) return false;
@@ -1822,51 +1821,51 @@ public class BusinessIntelligenceMetricsService {
         List<BiModels.ExecutiveRisk> risks = new ArrayList<>();
         if (changeFailures >= 5) {
             risks.add(new BiModels.ExecutiveRisk("change-failure", "Critical",
-                "变更失败率偏高", "发布稳定性下降，需优先排查高风险变更。", "变更",
+                "变更失败率偏高", "发布稳定性下降，需优先排查高风险变更。", "change",
                 String.valueOf(changeFailures)));
         }
         if (problemClosureRate < 0.55) {
             risks.add(new BiModels.ExecutiveRisk("problem-closure", "Warning",
-                "问题关闭率不足", "根因与永久修复积压，风险会持续放大。", "问题",
+                "问题关闭率不足", "根因与永久修复积压，风险会持续放大。", "problem",
                 percentage(problemClosureRate)));
         }
         if (requestOpen >= 15) {
             risks.add(new BiModels.ExecutiveRisk("request-open", "Warning",
-                "未完成请求积压", "履约体验承压，用户等待时间会拉长。", "请求",
+                "未完成请求积压", "履约体验承压，用户等待时间会拉长。", "request",
                 String.valueOf(requestOpen)));
         }
         if (changeIncidentRate >= 0.1) {
             risks.add(new BiModels.ExecutiveRisk("change-incident", "Warning",
-                "变更引发事件偏多", "上线质量与变更验证存在薄弱点。", "变更",
+                "变更引发事件偏多", "上线质量与变更验证存在薄弱点。", "change",
                 percentage(changeIncidentRate)));
         }
         if (requestCsat > 0 && requestCsat < 3.8) {
             risks.add(new BiModels.ExecutiveRisk("request-csat", "Attention",
-                "请求满意度下滑", "服务体验有波动，建议复盘高频诉求。", "请求",
+                "请求满意度下滑", "服务体验有波动，建议复盘高频诉求。", "request",
                 formatNumber(requestCsat)));
         }
         if (incidentSlaBreached > 0) {
             risks.add(new BiModels.ExecutiveRisk("incident-sla", "Attention",
-                "事件 SLA 出现违约", "核心事件响应存在超时情况。", "事件",
+                "事件 SLA 出现违约", "核心事件响应存在超时情况。", "incident",
                 String.valueOf(incidentSlaBreached)));
         }
         if (problemOpen >= 20) {
             risks.add(new BiModels.ExecutiveRisk("problem-open", "Attention",
-                "未关闭问题偏多", "问题池持续扩大，会拖累稳定性治理。", "问题",
+                "未关闭问题偏多", "问题池持续扩大，会拖累稳定性治理。", "problem",
                 String.valueOf(problemOpen)));
         }
         if (requestSlaRate > 0 && requestSlaRate < 0.60) {
             risks.add(new BiModels.ExecutiveRisk("request-sla-critical", "Critical",
-                "服务请求 SLA 达成率严重偏低", "履约流程存在系统性问题，需立即排查瓶颈环节。", "请求",
+                "服务请求 SLA 达成率严重偏低", "履约流程存在系统性问题，需立即排查瓶颈环节。", "request",
                 percentage(requestSlaRate)));
         } else if (requestSlaRate > 0 && requestSlaRate < 0.75) {
             risks.add(new BiModels.ExecutiveRisk("request-sla-breach", "Warning",
-                "服务请求 SLA 达成率不足", "部分请求类型履约超时，建议关注高频积压目录。", "请求",
+                "服务请求 SLA 达成率不足", "部分请求类型履约超时，建议关注高频积压目录。", "request",
                 percentage(requestSlaRate)));
         }
         return risks.stream()
             .sorted(Comparator.comparingInt(this::riskPriorityOrder))
-            .map(risk -> new RiskItem(risk.id(), risk.priority(), risk.title(), risk.impact()))
+            .map(risk -> new RiskItem(risk.id(), risk.priority(), risk.title(), risk.impact(), risk.process(), risk.value()))
             .toList();
     }
 
